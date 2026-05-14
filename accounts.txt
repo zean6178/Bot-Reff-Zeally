@@ -1,0 +1,13 @@
+# FORMAT: email:password:twitter_username
+# Contoh:
+# email1@gmail.com:Password123:twitter_user1
+# email2@gmail.com:Password456:twitter_user2
+#
+# SYARAT AKUN TWITTER:
+# - Umur akun minimal 90 hari
+# - Minimal 100 followers
+#
+# Hapus baris komentar (#) ini dan isi dengan akun kamu
+
+email1@gmail.com:Password123:twitter_user1
+email2@gmail.com:Password456:twitter_user2
