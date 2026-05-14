@@ -9,6 +9,13 @@ INVITE_LINK = "https://zealy.io/c/injectivemissions/invite/CJ75OjMext_T3VVKdsG2U
 COMMUNITY_SUBDOMAIN = "injectivemissions"
 
 # ─────────────────────────────────────────────
+#  MAILSLURP API KEY  ← ISI INI
+# ─────────────────────────────────────────────
+# Daftar gratis di: https://mailslurp.com
+# Dashboard → API Keys → Copy key
+MAILSLURP_API_KEY = "YOUR_MAILSLURP_API_KEY_HERE"
+
+# ─────────────────────────────────────────────
 #  2CAPTCHA API KEY  ← ISI INI
 # ─────────────────────────────────────────────
 # Daftar & isi saldo di: https://2captcha.com

@@ -7,106 +7,157 @@ import logging
 
 log = logging.getLogger(__name__)
 
-TEMPMAIL_LOL_API = "https://api.tempmail.lol"
+MAILSLURP_API = "https://api.mailslurp.com"
 
 
 class MailTM:
     """
-    Email provider menggunakan tempmail.lol API.
-    Domain-nya (misal: bhh.26ai.org, lc.dogmrp.com, dll) TIDAK di-blacklist Zealy.
-    API gratis, no signup, generate & baca inbox via token.
+    Email provider menggunakan MailSlurp API.
+    Domain MailSlurp TIDAK di-blacklist Zealy.
+    API key gratis: https://mailslurp.com (100 email/bulan gratis)
     """
 
     def __init__(self):
-        self.email    = None
-        self.password = None
-        self._token   = None
+        from config import MAILSLURP_API_KEY
+        self.api_key   = MAILSLURP_API_KEY
+        self.email     = None
+        self.password  = None
+        self._inbox_id = None
+
+        self._session = requests.Session()
+        self._session.headers.update({
+            "x-api-key":    self.api_key,
+            "Content-Type": "application/json",
+            "Accept":       "application/json",
+        })
 
     def _random_string(self, length: int = 10) -> str:
         chars = string.ascii_lowercase + string.digits
         return "".join(random.choices(chars, k=length))
 
+    # ──────────────────────────────────────────
+    #  CREATE INBOX
+    # ──────────────────────────────────────────
+
     def create_account(self) -> dict:
-        """Generate email baru via tempmail.lol"""
+        """Buat inbox baru via MailSlurp API"""
         try:
-            resp = requests.get(
-                f"{TEMPMAIL_LOL_API}/generate",
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=15
+            resp = self._session.post(
+                f"{MAILSLURP_API}/inboxes",
+                json={
+                    "name":        f"zealy-{self._random_string(6)}",
+                    "expiresIn":   3600000,  # 1 jam dalam ms
+                    "inboxType":   "HTTP_INBOX",
+                }
             )
             data = resp.json()
 
-            self.email   = data.get("address", "")
-            self._token  = data.get("token", "")
-            self.password = self._random_string(12)
+            if resp.status_code not in [200, 201]:
+                log.error(f"❌ MailSlurp error: {resp.status_code} - {data}")
+                return {}
 
-            if not self.email or not self._token:
+            self._inbox_id = data.get("id", "")
+            self.email     = data.get("emailAddress", "")
+            self.password  = self._random_string(12)
+
+            if not self.email or not self._inbox_id:
                 raise ValueError(f"Response tidak valid: {data}")
 
-            log.info(f"✅ tempmail.lol email dibuat: {self.email}")
+            log.info(f"✅ MailSlurp inbox dibuat: {self.email}")
             return {"email": self.email, "password": self.password}
 
         except Exception as e:
-            log.error(f"❌ tempmail.lol create error: {e}")
+            log.error(f"❌ MailSlurp create error: {e}")
             return {}
 
-    def _get_messages(self) -> list:
+    # ──────────────────────────────────────────
+    #  READ INBOX
+    # ──────────────────────────────────────────
+
+    def _get_emails(self) -> list:
         """Ambil daftar email dari inbox"""
         try:
-            resp = requests.get(
-                f"{TEMPMAIL_LOL_API}/auth/messages",
-                params={"token": self._token},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=15
+            resp = self._session.get(
+                f"{MAILSLURP_API}/inboxes/{self._inbox_id}/emails",
+                params={"sort": "DESC", "limit": 5}
             )
-            data = resp.json()
-            return data.get("email", [])
-        except Exception as e:
-            log.debug(f"get_messages error: {e}")
+            if resp.status_code == 200:
+                return resp.json()
             return []
+        except Exception as e:
+            log.debug(f"get_emails error: {e}")
+            return []
+
+    def _get_email_body(self, email_id: str) -> str:
+        """Ambil isi lengkap sebuah email"""
+        try:
+            resp = self._session.get(f"{MAILSLURP_API}/emails/{email_id}")
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("body", "") or data.get("html", "")
+            return ""
+        except Exception as e:
+            log.debug(f"get_email_body error: {e}")
+            return ""
 
     def find_otp_code(self, max_wait: int = 90) -> str:
         """Tunggu dan baca OTP dari inbox"""
-        log.info(f"📬 Menunggu OTP di {self.email}...")
+        log.info(f"📬 Menunggu OTP di MailSlurp: {self.email}...")
+
         elapsed  = 0
         interval = 5
 
         while elapsed < max_wait:
-            messages = self._get_messages()
-            for msg in messages:
-                subject = msg.get("subject", "")
-                body    = msg.get("body", "") or msg.get("html", "")
-                log.info(f"📧 Email masuk: {subject}")
-                otp = self._extract_otp(body)
+            emails = self._get_emails()
+            for em in emails:
+                email_id = em.get("id", "")
+                subject  = em.get("subject", "")
+                log.info(f"📧 MailSlurp email masuk: {subject}")
+
+                # Cek subject dulu (lebih cepat)
+                otp = self._extract_otp(subject)
+                if otp:
+                    return otp
+
+                # Ambil full body
+                body = self._get_email_body(email_id)
+                otp  = self._extract_otp(body)
                 if otp:
                     return otp
 
             time.sleep(interval)
             elapsed += interval
-            log.info(f"⏳ Menunggu OTP... ({elapsed}/{max_wait}s)")
+            log.info(f"⏳ Menunggu OTP MailSlurp... ({elapsed}/{max_wait}s)")
 
         log.warning(f"⚠️ Timeout setelah {max_wait}s")
         return ""
 
     def find_verification_link(self, max_wait: int = 90) -> str:
-        """Cari link verifikasi (fallback)"""
+        """Cari link verifikasi dari inbox (fallback)"""
         elapsed  = 0
         interval = 5
+
         while elapsed < max_wait:
-            messages = self._get_messages()
-            for msg in messages:
-                body = msg.get("body", "") or msg.get("html", "")
+            emails = self._get_emails()
+            for em in emails:
+                body = self._get_email_body(em.get("id", ""))
                 for pat in [
                     r'https://zealy\.io/verify[^\s"<>]+',
                     r'https://[^\s"<>]*zealy[^\s"<>]*verify[^\s"<>]+',
                 ]:
                     m = re.findall(pat, body, re.IGNORECASE)
                     if m:
-                        log.info(f"✅ Link verifikasi: {m[0].rstrip('.')}")
-                        return m[0].rstrip(".")
+                        link = m[0].rstrip(".")
+                        log.info(f"✅ Link verifikasi: {link}")
+                        return link
             time.sleep(interval)
             elapsed += interval
+
         return ""
+
+    # ──────────────────────────────────────────
+    #  HELPERS
+    # ──────────────────────────────────────────
 
     def _extract_otp(self, text: str) -> str:
         """Extract kode OTP 6 digit dari teks"""
@@ -129,5 +180,11 @@ class MailTM:
         return ""
 
     def delete_account(self):
-        """tempmail.lol tidak butuh delete — akun expired otomatis"""
-        pass
+        """Hapus inbox MailSlurp setelah selesai"""
+        if not self._inbox_id:
+            return
+        try:
+            self._session.delete(f"{MAILSLURP_API}/inboxes/{self._inbox_id}")
+            log.info(f"🗑️ Inbox {self.email} dihapus")
+        except Exception:
+            pass
