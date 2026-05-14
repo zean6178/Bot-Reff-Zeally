@@ -160,23 +160,44 @@ class MailTM:
     # ──────────────────────────────────────────
 
     def _extract_otp(self, text: str) -> str:
-        """Extract kode OTP 6 digit dari teks"""
+        """
+        Extract kode OTP dari teks.
+        Zealy OTP format: 6 karakter alphanumeric (misal: Z3Ge9A)
+        """
         if not text:
             return ""
-        patterns = [
-            r'code[:\s]+(\d{6})',
-            r'(\d{6})\s*is your',
-            r'verification code[:\s]+(\d{6})',
-            r'your code[:\s]+(\d{6})',
-            r'enter[:\s]+(\d{6})',
-            r'<[^>]*>\s*(\d{6})\s*<',
-            r'\b(\d{6})\b',
+
+        # Priority: Zealy OTP alphanumeric 6 karakter
+        alphanum_patterns = [
+            r'login code is\s+([A-Za-z0-9]{6})',           # "login code is Z3Ge9A"
+            r'code is\s+([A-Za-z0-9]{6})',                  # "code is Z3Ge9A"
+            r'code[:\s]+([A-Za-z0-9]{6})\b',               # "code: Z3Ge9A"
+            r'([A-Za-z0-9]{6})\s+is your',                 # "Z3Ge9A is your code"
+            r'verification code[:\s]+([A-Za-z0-9]{6})',    # "verification code: Z3Ge9A"
+            r'your code[:\s]+([A-Za-z0-9]{6})',            # "your code: Z3Ge9A"
+            r'enter[:\s]+([A-Za-z0-9]{6})',                # "enter: Z3Ge9A"
+            r'<[^>]*>\s*([A-Za-z0-9]{6})\s*<',            # dalam HTML tag
         ]
-        for pattern in patterns:
+
+        for pattern in alphanum_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             if matches:
-                log.info(f"✅ OTP ditemukan: {matches[0]}")
+                otp = matches[0]
+                # Pastikan bukan kata umum
+                if otp.lower() not in ['zealy', 'login', 'email', 'click', 'https']:
+                    log.info(f"✅ OTP ditemukan: {otp}")
+                    return otp
+
+        # Fallback: cari 6 digit angka murni
+        digit_patterns = [
+            r'\b(\d{6})\b',
+        ]
+        for pattern in digit_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                log.info(f"✅ OTP (numeric) ditemukan: {matches[0]}")
                 return matches[0]
+
         return ""
 
     def delete_account(self):

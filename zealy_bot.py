@@ -123,11 +123,12 @@ class ZealyBot:
         Verify OTP dan dapat JWT token.
         Endpoint: POST /api/authentication/otp/verify  (api-v2.zealy.io)
         Body: { email, otp }
-        Note: verify tidak perlu turnstile token berdasarkan source JS (aM schema hanya email+otp)
+        Note: Zealy OTP = 6 karakter alphanumeric (misal: Z3Ge9A), bukan 6 digit
         """
         log.info(f"[{self.email}] 🔑 Verifying OTP: {otp}")
 
         url = f"{ZEALY_V2}/api/authentication/otp/verify"
+        # Kirim OTP apa adanya (bisa alphanumeric 6 karakter)
         payload = {"email": self.email, "otp": otp}
 
         try:
