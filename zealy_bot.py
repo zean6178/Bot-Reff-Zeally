@@ -124,6 +124,7 @@ class ZealyBot:
         Endpoint: POST /api/authentication/otp/verify  (api-v2.zealy.io)
         Body: { email, otp }
         Note: Zealy OTP = 6 karakter alphanumeric (misal: Z3Ge9A), bukan 6 digit
+        Note: Jangan delay sebelum verify — OTP cepat expire!
         """
         log.info(f"[{self.email}] 🔑 Verifying OTP: {otp}")
 
@@ -137,7 +138,7 @@ class ZealyBot:
         }
 
         try:
-            self._delay()
+            # TIDAK delay sebelum verify — OTP Zealy expire cepat!
             resp = self._post(url, payload)
 
             if resp.status_code in [200, 201]:

@@ -45,7 +45,7 @@ TWITTER_USERNAMES_FILE = "twitter_accounts.txt"
 # ─────────────────────────────────────────────
 
 # Delay antar akun (detik)
-DELAY_BETWEEN_ACCOUNTS = 10
+DELAY_BETWEEN_ACCOUNTS = 120
 
 # Delay antar request (detik)
 DELAY_BETWEEN_REQUESTS = 2
