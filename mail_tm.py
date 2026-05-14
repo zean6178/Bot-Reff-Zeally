@@ -49,15 +49,19 @@ class MailTM:
         """Wait for OTP from Gmail inbox via IMAP. Match by alias tag."""
         log.info(f"📬 Menunggu OTP di Gmail: {self.email}...")
         elapsed  = 0
-        interval = 3  # check every 3 seconds for faster OTP capture
+        interval = 2  # check every 2 seconds for faster OTP capture
 
         while elapsed < max_wait:
+            # Cek DULU sebelum delay — bukan setelah
             otp = self._check_gmail_for_otp()
             if otp:
                 return otp
+            if elapsed == 0:
+                log.info(f"⏳ Belum ada OTP, cek ulang...")
+            else:
+                log.info(f"⏳ Menunggu OTP Gmail... ({elapsed}/{max_wait}s)")
             time.sleep(interval)
             elapsed += interval
-            log.info(f"⏳ Menunggu OTP Gmail... ({elapsed}/{max_wait}s)")
 
         log.warning(f"⚠️ Timeout Gmail setelah {max_wait}s")
         return ""
