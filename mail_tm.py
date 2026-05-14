@@ -63,7 +63,17 @@ class MailTM:
             domain = random.choice(GUERRILLA_DOMAINS)
             username = self._random_string(10)
 
-            # Set email address
+            # Step 1: Init session dulu (dapat sid_token)
+            init_resp = requests.get(
+                GUERRILLA_API,
+                params={"f": "get_email_address", "lang": "en"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15
+            )
+            init_data = init_resp.json()
+            self._guerrilla_sid_token = init_data.get("sid_token", "")
+
+            # Step 2: Set custom email address
             resp = requests.get(
                 GUERRILLA_API,
                 params={
@@ -71,7 +81,9 @@ class MailTM:
                     "email_user":  username,
                     "lang":        "en",
                     "site":        domain,
+                    "sid_token":   self._guerrilla_sid_token,
                 },
+                headers={"User-Agent": "Mozilla/5.0"},
                 timeout=15
             )
             data = resp.json()
@@ -101,6 +113,7 @@ class MailTM:
                     "seq":       self._guerrilla_seq,
                     "sid_token": self._guerrilla_sid_token,
                 },
+                headers={"User-Agent": "Mozilla/5.0"},
                 timeout=15
             )
             data = resp.json()
@@ -119,6 +132,7 @@ class MailTM:
                     "email_id":  mail_id,
                     "sid_token": self._guerrilla_sid_token,
                 },
+                headers={"User-Agent": "Mozilla/5.0"},
                 timeout=15
             )
             data = resp.json()
