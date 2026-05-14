@@ -5,26 +5,33 @@ import logging
 from config import (
     INVITE_LINK,
     COMMUNITY_SUBDOMAIN,
-    ZEALY_API_BASE,
     DELAY_BETWEEN_REQUESTS,
     USER_AGENT,
 )
 
 log = logging.getLogger(__name__)
 
-# Zealy menggunakan Supabase Auth di balik layar
-ZEALY_AUTH_URL = "https://backend.zealy.io/auth/v1"
-ZEALY_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTY0NjY0MDQwOCwiZXhwIjoxOTYyMjE2NDA4fQ.Ie_DhMNsQbfOmOjgDwHfxo6ETCMwlnJ6CjKLFNLOeP4"
+# Zealy API endpoints
+ZEALY_API      = "https://api-v2.zealy.io/public"
 ZEALY_BACKEND  = "https://backend.zealy.io"
 
 
 class ZealyBot:
-    def __init__(self, email: str, password: str, twitter_username: str, proxy: str = None):
+    """
+    Bot Zealy dengan flow OTP (passwordless email auth).
+
+    Flow:
+      1. send_otp(email)       → Zealy kirim OTP ke inbox
+      2. verify_otp(email,otp) → dapat access_token
+      3. create_profile(name)  → set username pertama kali
+      4. join_community()      → join via invite link
+      5. complete_quests()     → complete semua quest otomatis
+    """
+
+    def __init__(self, email: str, twitter_username: str, proxy: str = None):
         self.email = email
-        self.password = password
         self.twitter_username = twitter_username
         self.token = None
-        self.refresh_token = None
         self.user_id = None
 
         self.session = requests.Session()
@@ -33,287 +40,334 @@ class ZealyBot:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Origin": "https://zealy.io",
-            "Referer": "https://zealy.io/",
-            "apikey": ZEALY_ANON_KEY,
+            "Referer": "https://zealy.io/sign-up",
         })
 
         if proxy:
-            self.session.proxies = {
-                "http": proxy,
-                "https": proxy
-            }
+            self.session.proxies = {"http": proxy, "https": proxy}
             log.info(f"[{self.email}] Menggunakan proxy: {proxy}")
 
-    def _delay(self):
-        """Delay random antara request"""
-        delay = DELAY_BETWEEN_REQUESTS + random.uniform(0.5, 1.5)
-        time.sleep(delay)
+    # ─────────────────────────────────────────────
+    #  HELPERS
+    # ─────────────────────────────────────────────
 
-    def _set_auth_header(self):
-        """Set header Authorization setelah login/register"""
+    def _delay(self, extra: float = 0):
+        time.sleep(DELAY_BETWEEN_REQUESTS + random.uniform(0.5, 1.5) + extra)
+
+    def _set_auth(self):
         if self.token:
-            self.session.headers.update({
-                "Authorization": f"Bearer {self.token}"
-            })
+            self.session.headers.update({"Authorization": f"Bearer {self.token}"})
 
-    def register(self) -> bool:
-        """Daftar akun baru di Zealy via Supabase Auth"""
-        log.info(f"[{self.email}] Mencoba registrasi...")
+    def _log_response(self, label: str, resp):
+        log.debug(f"[{self.email}] {label} → {resp.status_code}: {resp.text[:200]}")
 
-        url = f"{ZEALY_AUTH_URL}/signup"
+    # ─────────────────────────────────────────────
+    #  STEP 1: Kirim OTP ke email
+    # ─────────────────────────────────────────────
+
+    def send_otp(self) -> bool:
+        """Kirim OTP ke email via Zealy"""
+        log.info(f"[{self.email}] 📨 Mengirim OTP ke email...")
+
+        # Zealy pakai flow: kirim email → dapat OTP di inbox
+        # Endpoint yang valid berdasarkan testing
+        endpoints_to_try = [
+            f"{ZEALY_BACKEND}/users",
+            f"{ZEALY_API}/users",
+            f"{ZEALY_API}/auth/send-otp",
+            f"{ZEALY_API}/auth/email",
+        ]
+
+        payload = {"email": self.email}
+
+        for url in endpoints_to_try:
+            try:
+                response = self.session.post(url, json=payload)
+                self._log_response(f"send_otp {url}", response)
+
+                # 200/201/202 = OTP terkirim
+                if response.status_code in [200, 201, 202]:
+                    log.info(f"[{self.email}] ✅ OTP request berhasil via {url}")
+                    return True
+
+                # 400 bad request — endpoint ada tapi payload salah
+                if response.status_code == 400:
+                    log.warning(f"[{self.email}] ⚠️ Bad request di {url}: {response.text[:150]}")
+                    continue
+
+                # 404 = endpoint tidak ada, coba berikutnya
+                if response.status_code == 404:
+                    continue
+
+            except Exception as e:
+                log.error(f"[{self.email}] ❌ Error send_otp {url}: {e}")
+                continue
+
+        log.error(f"[{self.email}] ❌ Semua endpoint send_otp gagal")
+        return False
+
+    # ─────────────────────────────────────────────
+    #  STEP 2: Verifikasi OTP
+    # ─────────────────────────────────────────────
+
+    def verify_otp(self, otp: str) -> bool:
+        """Submit OTP code dan dapatkan token"""
+        log.info(f"[{self.email}] 🔑 Memverifikasi OTP: {otp}")
+
+        endpoints_to_try = [
+            (f"{ZEALY_BACKEND}/users/verify",     {"email": self.email, "otp": otp}),
+            (f"{ZEALY_BACKEND}/users/verify",     {"email": self.email, "code": otp}),
+            (f"{ZEALY_API}/auth/verify-otp",      {"email": self.email, "otp": otp}),
+            (f"{ZEALY_API}/auth/verify-otp",      {"email": self.email, "code": otp}),
+            (f"{ZEALY_API}/auth/verify",          {"email": self.email, "otp": otp}),
+            (f"{ZEALY_API}/auth/validate",        {"email": self.email, "code": otp}),
+            (f"{ZEALY_API}/users/verify",         {"email": self.email, "otp": otp}),
+            (f"{ZEALY_BACKEND}/auth/verify",      {"email": self.email, "otp": otp, "type": "email"}),
+        ]
+
+        for url, payload in endpoints_to_try:
+            try:
+                self._delay()
+                response = self.session.post(url, json=payload)
+                self._log_response(f"verify_otp {url}", response)
+
+                if response.status_code in [200, 201]:
+                    data = response.json()
+                    # Zealy bisa return berbagai field untuk token
+                    self.token = (
+                        data.get("accessToken") or
+                        data.get("access_token") or
+                        data.get("token") or
+                        data.get("jwt")
+                    )
+                    self.user_id = (
+                        data.get("id") or
+                        data.get("userId") or
+                        data.get("user", {}).get("id")
+                    )
+
+                    if self.token:
+                        log.info(f"[{self.email}] ✅ OTP verified! User ID: {self.user_id}")
+                        self._set_auth()
+                        return True
+                    else:
+                        log.warning(f"[{self.email}] ⚠️ Response 200 tapi tidak ada token: {data}")
+
+                if response.status_code == 404:
+                    continue
+
+            except Exception as e:
+                log.error(f"[{self.email}] ❌ Error verify_otp {url}: {e}")
+                continue
+
+        log.error(f"[{self.email}] ❌ Semua endpoint verify_otp gagal")
+        return False
+
+    # ─────────────────────────────────────────────
+    #  STEP 3: Set username (create profile)
+    # ─────────────────────────────────────────────
+
+    def create_profile(self) -> bool:
+        """Set username / nama akun setelah registrasi pertama kali"""
+        log.info(f"[{self.email}] 👤 Membuat profil dengan username: {self.twitter_username}")
+
+        # Generate username yang unik (tambah angka random di belakang)
+        username = f"{self.twitter_username}{random.randint(100, 999)}"
+
+        url = f"{ZEALY_BACKEND}/users/me"
         payload = {
-            "email": self.email,
-            "password": self.password,
-            "data": {
-                "name": self.twitter_username,
-            }
+            "name": username,
+            "username": username,
         }
 
         try:
-            response = self.session.post(url, json=payload)
-            log.info(f"[{self.email}] 🔍 Register status: {response.status_code}")
-            log.info(f"[{self.email}] 🔍 Register response: {response.text[:500]}")
-
-            # Handle empty response
-            if not response.text.strip():
-                log.error(f"[{self.email}] ❌ Response kosong dari server")
-                return False
-
-            data = response.json()
+            self._delay()
+            response = self.session.patch(url, json=payload)
+            self._log_response("create_profile", response)
 
             if response.status_code in [200, 201]:
-                self.token = data.get("access_token")
-                self.refresh_token = data.get("refresh_token")
-                user = data.get("user", {})
-                self.user_id = user.get("id")
-                log.info(f"[{self.email}] ✅ Registrasi berhasil! User ID: {self.user_id}")
-                self._set_auth_header()
-                return True
-            elif response.status_code == 400:
-                msg = data.get("msg", "") or data.get("message", "") or str(data)
-                if "already registered" in msg.lower() or "already" in msg.lower():
-                    log.warning(f"[{self.email}] ⚠️ Email sudah terdaftar, mencoba login...")
-                    return self.login()
-                log.error(f"[{self.email}] ❌ Registrasi gagal: {response.status_code} - {data}")
-                return False
-            else:
-                log.error(f"[{self.email}] ❌ Registrasi gagal: {response.status_code} - {data}")
-                return False
-
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error saat registrasi: {e}")
-            log.error(f"[{self.email}] 🔍 Raw response: {response.text[:500] if 'response' in locals() else 'N/A'}")
-            return False
-
-    def login(self) -> bool:
-        """Login ke akun Zealy via Supabase Auth"""
-        log.info(f"[{self.email}] Mencoba login...")
-
-        url = f"{ZEALY_AUTH_URL}/token?grant_type=password"
-        payload = {
-            "email": self.email,
-            "password": self.password,
-        }
-
-        try:
-            self._delay()
-            response = self.session.post(url, json=payload)
-            data = response.json()
-
-            if response.status_code == 200:
-                self.token = data.get("access_token")
-                self.refresh_token = data.get("refresh_token")
-                user = data.get("user", {})
-                self.user_id = user.get("id")
-                log.info(f"[{self.email}] ✅ Login berhasil! User ID: {self.user_id}")
-                self._set_auth_header()
-                return True
-            else:
-                log.error(f"[{self.email}] ❌ Login gagal: {response.status_code} - {data}")
-                return False
-
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error saat login: {e}")
-            return False
-
-    def verify_email(self, verification_link: str) -> bool:
-        """Klik link verifikasi email dari Zealy"""
-        if not verification_link:
-            log.warning(f"[{self.email}] ⚠️ Tidak ada link verifikasi")
-            return False
-
-        log.info(f"[{self.email}] Memverifikasi email via link...")
-
-        try:
-            self._delay()
-            # Gunakan session biasa tanpa auth header untuk verifikasi
-            plain = requests.Session()
-            plain.headers.update({"User-Agent": USER_AGENT})
-            response = plain.get(verification_link, allow_redirects=True)
-
-            if response.status_code in [200, 201, 302]:
-                log.info(f"[{self.email}] ✅ Email berhasil diverifikasi!")
-                return True
-            else:
-                log.warning(f"[{self.email}] ⚠️ Verifikasi response: {response.status_code} (lanjut saja)")
-                return True  # Lanjut meskipun status code tidak ideal
-
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error verifikasi email: {e}")
-            return False
-
-    def join_community_via_invite(self) -> bool:
-        """Join komunitas Zealy via invite link"""
-        log.info(f"[{self.email}] Mencoba join komunitas via invite link...")
-
-        invite_code = INVITE_LINK.split("/invite/")[1].split("?")[0]
-        quest_id = None
-        if "questId=" in INVITE_LINK:
-            quest_id = INVITE_LINK.split("questId=")[1]
-
-        # Coba endpoint v2 backend dulu
-        url = f"{ZEALY_BACKEND}/public/communities/{COMMUNITY_SUBDOMAIN}/members"
-        payload = {"inviteCode": invite_code}
-        if quest_id:
-            payload["questId"] = quest_id
-
-        try:
-            self._delay()
-            response = self.session.post(url, json=payload)
-            data = response.json()
-
-            if response.status_code in [200, 201]:
-                log.info(f"[{self.email}] ✅ Berhasil join komunitas!")
+                data = response.json()
+                self.user_id = self.user_id or data.get("id")
+                log.info(f"[{self.email}] ✅ Profil dibuat: {username}")
                 return True
             elif response.status_code == 409:
-                log.warning(f"[{self.email}] ⚠️ Sudah join komunitas sebelumnya")
-                return True
+                log.warning(f"[{self.email}] ⚠️ Username sudah dipakai, coba lagi...")
+                payload["username"] = f"{self.twitter_username}{random.randint(1000, 9999)}"
+                self._delay()
+                r2 = self.session.patch(url, json=payload)
+                if r2.status_code in [200, 201]:
+                    log.info(f"[{self.email}] ✅ Profil dibuat (retry)")
+                    return True
             else:
-                # Fallback ke endpoint lama
-                log.warning(f"[{self.email}] ⚠️ Backend endpoint gagal ({response.status_code}), coba endpoint lain...")
-                return self._join_community_fallback(invite_code, quest_id)
+                log.warning(f"[{self.email}] ⚠️ Profil gagal dibuat: {response.status_code} — lanjut saja")
+                return True  # Tidak kritis, lanjut
 
         except Exception as e:
-            log.error(f"[{self.email}] ❌ Error saat join komunitas: {e}")
-            return False
+            log.error(f"[{self.email}] ❌ Error create_profile: {e}")
 
-    def _join_community_fallback(self, invite_code: str, quest_id: str = None) -> bool:
-        """Fallback join komunitas pakai endpoint alternatif"""
-        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/members"
+        return True  # Non-blocking
+
+    # ─────────────────────────────────────────────
+    #  STEP 4: Join komunitas via invite link
+    # ─────────────────────────────────────────────
+
+    def join_community(self) -> bool:
+        """Join komunitas Zealy via invite link"""
+        log.info(f"[{self.email}] 🔗 Mencoba join komunitas...")
+
+        invite_code = INVITE_LINK.split("/invite/")[1].split("?")[0]
+        quest_id = INVITE_LINK.split("questId=")[1] if "questId=" in INVITE_LINK else None
+
         payload = {"inviteCode": invite_code}
         if quest_id:
             payload["questId"] = quest_id
-        try:
-            self._delay()
-            response = self.session.post(url, json=payload)
-            data = response.json()
-            if response.status_code in [200, 201, 409]:
-                log.info(f"[{self.email}] ✅ Berhasil join komunitas (fallback)!")
-                return True
-            else:
-                log.error(f"[{self.email}] ❌ Gagal join komunitas: {response.status_code} - {data}")
-                return False
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error fallback join: {e}")
-            return False
+
+        endpoints_to_try = [
+            f"{ZEALY_API}/communities/{COMMUNITY_SUBDOMAIN}/members",
+            f"{ZEALY_BACKEND}/public/communities/{COMMUNITY_SUBDOMAIN}/members",
+        ]
+
+        for url in endpoints_to_try:
+            try:
+                self._delay()
+                response = self.session.post(url, json=payload)
+                self._log_response(f"join_community {url}", response)
+
+                if response.status_code in [200, 201]:
+                    log.info(f"[{self.email}] ✅ Berhasil join komunitas!")
+                    return True
+                elif response.status_code == 409:
+                    log.warning(f"[{self.email}] ⚠️ Sudah join komunitas sebelumnya")
+                    return True
+                elif response.status_code == 404:
+                    continue
+
+            except Exception as e:
+                log.error(f"[{self.email}] ❌ Error join_community: {e}")
+                continue
+
+        log.error(f"[{self.email}] ❌ Gagal join komunitas")
+        return False
+
+    # ─────────────────────────────────────────────
+    #  STEP 5: Ambil dan complete quest
+    # ─────────────────────────────────────────────
 
     def get_quests(self) -> list:
         """Ambil daftar quest yang tersedia"""
-        log.info(f"[{self.email}] Mengambil daftar quest...")
+        log.info(f"[{self.email}] 📋 Mengambil daftar quest...")
 
-        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/quests"
+        urls = [
+            f"{ZEALY_API}/communities/{COMMUNITY_SUBDOMAIN}/quests",
+            f"{ZEALY_BACKEND}/public/communities/{COMMUNITY_SUBDOMAIN}/quests",
+        ]
 
-        try:
-            self._delay()
-            response = self.session.get(url)
-            data = response.json()
+        for url in urls:
+            try:
+                self._delay()
+                response = self.session.get(url)
 
-            if response.status_code == 200:
-                quests = data if isinstance(data, list) else data.get("quests", [])
-                log.info(f"[{self.email}] ✅ Ditemukan {len(quests)} quest")
-                return quests
-            else:
-                log.error(f"[{self.email}] ❌ Gagal ambil quest: {response.status_code}")
-                return []
+                if response.status_code == 200:
+                    data = response.json()
+                    quests = data if isinstance(data, list) else data.get("quests", [])
+                    log.info(f"[{self.email}] ✅ Ditemukan {len(quests)} quest")
+                    return quests
+                elif response.status_code == 404:
+                    continue
 
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error saat ambil quest: {e}")
-            return []
+            except Exception as e:
+                log.error(f"[{self.email}] ❌ Error get_quests: {e}")
+                continue
 
-    def complete_quest(self, quest_id: str, quest_name: str = "") -> bool:
-        """Coba complete sebuah quest"""
-        log.info(f"[{self.email}] Mencoba complete quest: {quest_name or quest_id}")
+        return []
 
-        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
+    def claim_quest(self, quest_id: str, quest_name: str = "", is_twitter: bool = False) -> bool:
+        """Claim sebuah quest"""
+        log.info(f"[{self.email}] 🎯 Claiming quest: {quest_name or quest_id}")
 
-        try:
-            self._delay()
-            response = self.session.post(url, json={})
-            data = response.json()
-
-            if response.status_code in [200, 201]:
-                xp = data.get("xp", 0)
-                log.info(f"[{self.email}] ✅ Quest '{quest_name}' selesai! +{xp} XP")
-                return True
-            elif response.status_code == 409:
-                log.warning(f"[{self.email}] ⚠️ Quest sudah pernah di-complete")
-                return True
-            else:
-                log.error(f"[{self.email}] ❌ Gagal complete quest: {response.status_code} - {data}")
-                return False
-
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error saat complete quest: {e}")
-            return False
-
-    def complete_twitter_quest(self, quest_id: str, quest_name: str = "") -> bool:
-        """Complete quest yang membutuhkan verifikasi Twitter"""
-        log.info(f"[{self.email}] Mencoba complete Twitter quest: {quest_name or quest_id}")
-
-        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
-        payload = {"twitterUsername": self.twitter_username}
+        url = f"{ZEALY_API}/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
+        payload = {"twitterUsername": self.twitter_username} if is_twitter else {}
 
         try:
             self._delay()
             response = self.session.post(url, json=payload)
-            data = response.json()
+            self._log_response(f"claim_quest {quest_name}", response)
 
             if response.status_code in [200, 201]:
-                xp = data.get("xp", 0)
-                log.info(f"[{self.email}] ✅ Twitter quest '{quest_name}' selesai! +{xp} XP")
+                xp = response.json().get("xp", 0)
+                log.info(f"[{self.email}] ✅ Quest '{quest_name}' berhasil! +{xp} XP")
                 return True
             elif response.status_code == 409:
-                log.warning(f"[{self.email}] ⚠️ Quest sudah pernah di-complete")
+                log.warning(f"[{self.email}] ⚠️ Quest '{quest_name}' sudah pernah di-claim")
                 return True
             else:
-                log.error(f"[{self.email}] ❌ Gagal complete Twitter quest: {response.status_code} - {data}")
+                log.warning(f"[{self.email}] ⚠️ Quest '{quest_name}' gagal: {response.status_code}")
                 return False
 
         except Exception as e:
-            log.error(f"[{self.email}] ❌ Error: {e}")
+            log.error(f"[{self.email}] ❌ Error claim_quest: {e}")
             return False
 
-    def get_user_xp(self) -> int:
-        """Cek XP user di komunitas"""
-        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/users/{self.user_id}"
+    def complete_quests(self) -> int:
+        """Ambil dan complete semua quest yang bisa di-automate"""
+        quests = self.get_quests()
+        completed = 0
 
-        try:
+        SKIP_TYPES = ["discord", "snapshot", "manual", "wallet", "nft", "token"]
+
+        for quest in quests:
+            quest_id   = quest.get("id", "")
+            quest_name = quest.get("name", quest.get("title", ""))
+            quest_type = quest.get("type", "").lower()
+
+            if not quest_id:
+                continue
+
+            # Skip quest yang butuh verifikasi manual/external
+            if any(t in quest_type for t in SKIP_TYPES):
+                log.info(f"[{self.email}] ⏭️ Skip quest ({quest_type}): {quest_name}")
+                continue
+
+            is_twitter = "twitter" in quest_type or "x.com" in quest_name.lower()
+            if self.claim_quest(quest_id, quest_name, is_twitter=is_twitter):
+                completed += 1
+
             self._delay()
-            response = self.session.get(url)
-            data = response.json()
 
-            if response.status_code == 200:
-                xp = data.get("xp", 0)
-                log.info(f"[{self.email}] 📊 XP saat ini: {xp}")
-                return xp
+        return completed
+
+    def get_user_xp(self) -> int:
+        """Cek XP user saat ini"""
+        if not self.user_id:
             return 0
 
-        except Exception as e:
-            log.error(f"[{self.email}] ❌ Error ambil XP: {e}")
-            return 0
+        urls = [
+            f"{ZEALY_API}/communities/{COMMUNITY_SUBDOMAIN}/users/{self.user_id}",
+            f"{ZEALY_BACKEND}/public/communities/{COMMUNITY_SUBDOMAIN}/users/{self.user_id}",
+        ]
 
-    def run(self, verification_link: str = "") -> dict:
-        """Jalankan seluruh flow bot"""
+        for url in urls:
+            try:
+                self._delay()
+                response = self.session.get(url)
+                if response.status_code == 200:
+                    xp = response.json().get("xp", 0)
+                    log.info(f"[{self.email}] 📊 XP: {xp}")
+                    return xp
+            except Exception:
+                continue
+
+        return 0
+
+    # ─────────────────────────────────────────────
+    #  MAIN RUN — dipanggil dari main.py setelah OTP dikirim
+    # ─────────────────────────────────────────────
+
+    def run_after_otp(self, otp: str) -> dict:
+        """
+        Jalankan flow setelah OTP didapat dari inbox.
+        Dipanggil dari main.py setelah mail_tm.find_otp_code() berhasil.
+        """
         result = {
             "email": self.email,
             "twitter": self.twitter_username,
@@ -322,55 +376,32 @@ class ZealyBot:
             "message": ""
         }
 
-        # Step 1: Register
-        if not self.register():
-            result["message"] = "Gagal register/login"
+        # Step 2: Verify OTP
+        if not self.verify_otp(otp):
+            result["message"] = "OTP tidak valid atau endpoint tidak ditemukan"
             return result
 
         self._delay()
 
-        # Step 2: Verifikasi email jika ada link
-        if verification_link:
-            self.verify_email(verification_link)
-            self._delay()
+        # Step 3: Buat profil
+        self.create_profile()
+        self._delay()
 
-        # Step 3: Join komunitas via invite link
-        if not self.join_community_via_invite():
+        # Step 4: Join komunitas
+        if not self.join_community():
             result["message"] = "Gagal join komunitas"
             return result
 
         self._delay()
 
-        # Step 4: Ambil dan complete quest
-        quests = self.get_quests()
-        completed_count = 0
+        # Step 5: Complete quests
+        completed = self.complete_quests()
 
-        for quest in quests:
-            quest_id = quest.get("id", "")
-            quest_name = quest.get("name", quest.get("title", ""))
-            quest_type = quest.get("type", "")
-
-            # Skip quest yang butuh verifikasi manual
-            skip_types = ["discord", "snapshot", "manual"]
-            if any(t in quest_type.lower() for t in skip_types):
-                log.info(f"[{self.email}] ⏭️ Skip quest manual: {quest_name}")
-                continue
-
-            # Complete Twitter quest vs quest biasa
-            if "twitter" in quest_type.lower() or "x.com" in quest_name.lower():
-                if self.complete_twitter_quest(quest_id, quest_name):
-                    completed_count += 1
-            else:
-                if self.complete_quest(quest_id, quest_name):
-                    completed_count += 1
-
-            self._delay()
-
-        # Step 5: Cek XP
+        # Step 6: Cek XP
         xp = self.get_user_xp()
 
         result["status"] = "success" if xp >= 1 else "partial"
         result["xp"] = xp
-        result["message"] = f"Selesai! Complete {completed_count} quest, XP: {xp}"
+        result["message"] = f"Selesai! {completed} quest di-claim, XP: {xp}"
 
         return result

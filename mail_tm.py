@@ -1,3 +1,4 @@
+import re
 import requests
 import random
 import string
@@ -12,7 +13,7 @@ MAILTM_API = "https://api.mail.tm"
 class MailTM:
     """
     Wrapper untuk mail.tm API
-    Auto-generate email temporary dan baca inbox
+    Auto-generate email temporary, baca inbox, dan extract OTP/link
     """
 
     def __init__(self):
@@ -27,7 +28,6 @@ class MailTM:
         self.account_id = None
 
     def _random_string(self, length: int = 10) -> str:
-        """Generate random string untuk username"""
         chars = string.ascii_lowercase + string.digits
         return "".join(random.choices(chars, k=length))
 
@@ -37,7 +37,6 @@ class MailTM:
             response = self.session.get(f"{MAILTM_API}/domains")
             data = response.json()
 
-            # Response bisa berupa list langsung atau dict dengan hydra:member
             if isinstance(data, list):
                 domains = [d["domain"] for d in data if "domain" in d]
             elif isinstance(data, dict):
@@ -50,7 +49,6 @@ class MailTM:
                 log.info(f"✅ Domain tersedia: {domains}")
                 return domains
 
-            # Jika kosong, coba fetch ulang domain yang valid
             log.warning("⚠️ Tidak ada domain dari API, mencoba fallback...")
             return self._get_fallback_domains()
 
@@ -59,9 +57,7 @@ class MailTM:
             return self._get_fallback_domains()
 
     def _get_fallback_domains(self) -> list:
-        """Coba ambil domain valid secara manual"""
         try:
-            # Coba endpoint alternatif
             response = self.session.get(f"{MAILTM_API}/domains?page=1")
             data = response.json()
             if isinstance(data, list):
@@ -72,20 +68,14 @@ class MailTM:
                 return domains
         except Exception:
             pass
-        # Fallback ke domain yang diketahui aktif
         return ["mailnull.com", "maildrop.cc"]
 
     def create_account(self) -> dict:
-        """
-        Auto-generate email baru di mail.tm
-        Return: {"email": "...", "password": "..."}
-        """
+        """Auto-generate email baru di mail.tm"""
         domains = self.get_domains()
         domain = random.choice(domains)
-
         username = self._random_string(10)
-        password = self._random_string(12) + "A1!"  # pastikan ada uppercase + digit + simbol
-
+        password = self._random_string(12) + "A1!"
         email = f"{username}@{domain}"
 
         try:
@@ -133,12 +123,8 @@ class MailTM:
             log.error(f"❌ Error login mail.tm: {e}")
             return False
 
-    def get_messages(self, max_wait: int = 60, interval: int = 5) -> list:
-        """
-        Tunggu dan ambil pesan masuk
-        max_wait: maksimal waktu tunggu (detik)
-        interval: cek setiap berapa detik
-        """
+    def get_messages(self, max_wait: int = 90, interval: int = 5) -> list:
+        """Tunggu dan ambil pesan masuk"""
         log.info(f"📬 Menunggu email masuk di {self.email}...")
         elapsed = 0
 
@@ -169,38 +155,77 @@ class MailTM:
         try:
             response = self.session.get(f"{MAILTM_API}/messages/{message_id}")
             data = response.json()
-
-            # Coba ambil text dulu, kalau tidak ada ambil HTML
-            content = data.get("text", "") or data.get("html", [""])[0]
+            # Coba text dulu, fallback ke HTML
+            content = data.get("text", "")
+            if not content:
+                html_list = data.get("html", [])
+                content = html_list[0] if html_list else ""
             return content
 
         except Exception as e:
             log.error(f"❌ Error ambil isi email: {e}")
             return ""
 
-    def find_verification_link(self, max_wait: int = 60) -> str:
+    def find_otp_code(self, max_wait: int = 90) -> str:
         """
-        Cari link verifikasi dari email Zealy
-        Return URL verifikasi atau string kosong jika tidak ditemukan
+        Tunggu email dari Zealy dan extract kode OTP 6 digit.
+        Return: string kode OTP atau '' jika tidak ditemukan
         """
-        import re
-
         messages = self.get_messages(max_wait=max_wait)
 
         for msg in messages:
             msg_id = msg.get("id", "")
             subject = msg.get("subject", "")
+            log.info(f"📧 Subject email: {subject}")
 
-            log.info(f"📧 Subject: {subject}")
-
-            # Ambil isi email
             content = self.get_message_content(msg_id)
-
             if not content:
                 continue
 
-            # Cari link verifikasi Zealy
-            # Pattern: https://zealy.io/verify/... atau https://zealy.io/api/...
+            # Pattern OTP: 6 angka yang berdiri sendiri
+            otp_patterns = [
+                r'\b(\d{6})\b',                          # 6 digit angka
+                r'code[:\s]+(\d{6})',                    # "code: 123456"
+                r'(\d{6})\s*is your',                    # "123456 is your code"
+                r'verification code[:\s]+(\d{6})',       # "verification code: 123456"
+                r'your code[:\s]+(\d{6})',               # "your code: 123456"
+                r'enter[:\s]+(\d{6})',                   # "enter: 123456"
+                r'<[^>]*>(\d{6})<',                      # OTP di dalam HTML tag
+            ]
+
+            for pattern in otp_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                if matches:
+                    otp = matches[0]
+                    log.info(f"✅ OTP ditemukan: {otp}")
+                    return otp
+
+            # Fallback: cari semua 6 digit, ambil yang paling cocok
+            all_digits = re.findall(r'\b\d{6}\b', content)
+            if all_digits:
+                otp = all_digits[0]
+                log.info(f"✅ OTP ditemukan (fallback): {otp}")
+                return otp
+
+            log.warning(f"⚠️ Tidak ada OTP di email: {subject}")
+
+        return ""
+
+    def find_verification_link(self, max_wait: int = 90) -> str:
+        """
+        Cari link verifikasi dari email Zealy (fallback jika pakai link bukan OTP)
+        """
+        messages = self.get_messages(max_wait=max_wait)
+
+        for msg in messages:
+            msg_id = msg.get("id", "")
+            subject = msg.get("subject", "")
+            log.info(f"📧 Subject: {subject}")
+
+            content = self.get_message_content(msg_id)
+            if not content:
+                continue
+
             patterns = [
                 r'https://zealy\.io/verify[^\s"<>]+',
                 r'https://zealy\.io/api/auth/verify[^\s"<>]+',
