@@ -1,0 +1,12 @@
+# Daftar Twitter/X username yang akan dipakai
+# Format: 1 username per baris (tanpa @)
+# SYARAT: akun berumur minimal 90 hari & punya minimal 100 followers
+#
+# Contoh:
+# johndoe_twitter
+# janedoe_twitter
+# crypto_whale99
+
+johndoe_twitter
+janedoe_twitter
+crypto_whale99

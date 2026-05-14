@@ -8,15 +8,8 @@ from config import (
     ZEALY_API_BASE,
     DELAY_BETWEEN_REQUESTS,
     USER_AGENT,
-    PROXIES
 )
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S"
-)
 log = logging.getLogger(__name__)
 
 
@@ -48,6 +41,13 @@ class ZealyBot:
         """Delay random antara request"""
         delay = DELAY_BETWEEN_REQUESTS + random.uniform(0.5, 1.5)
         time.sleep(delay)
+
+    def _set_auth_header(self):
+        """Set header Authorization setelah login/register"""
+        if self.token:
+            self.session.headers.update({
+                "Authorization": f"Bearer {self.token}"
+            })
 
     def register(self) -> bool:
         """Daftar akun baru di Zealy"""
@@ -110,30 +110,40 @@ class ZealyBot:
             log.error(f"[{self.email}] ❌ Error saat login: {e}")
             return False
 
-    def _set_auth_header(self):
-        """Set header Authorization setelah login/register"""
-        if self.token:
-            self.session.headers.update({
-                "Authorization": f"Bearer {self.token}"
-            })
+    def verify_email(self, verification_link: str) -> bool:
+        """Klik link verifikasi email dari Zealy"""
+        if not verification_link:
+            log.warning(f"[{self.email}] ⚠️ Tidak ada link verifikasi")
+            return False
+
+        log.info(f"[{self.email}] Memverifikasi email via link...")
+
+        try:
+            self._delay()
+            response = self.session.get(verification_link, allow_redirects=True)
+
+            if response.status_code in [200, 201, 302]:
+                log.info(f"[{self.email}] ✅ Email berhasil diverifikasi!")
+                return True
+            else:
+                log.error(f"[{self.email}] ❌ Verifikasi gagal: {response.status_code}")
+                return False
+
+        except Exception as e:
+            log.error(f"[{self.email}] ❌ Error verifikasi email: {e}")
+            return False
 
     def join_community_via_invite(self) -> bool:
         """Join komunitas Zealy via invite link"""
         log.info(f"[{self.email}] Mencoba join komunitas via invite link...")
 
-        # Extract invite code dari link
-        # Format: /invite/CJ75OjMext_T3VVKdsG2U
         invite_code = INVITE_LINK.split("/invite/")[1].split("?")[0]
         quest_id = None
-
         if "questId=" in INVITE_LINK:
             quest_id = INVITE_LINK.split("questId=")[1]
 
         url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/members"
-        payload = {
-            "inviteCode": invite_code,
-        }
-
+        payload = {"inviteCode": invite_code}
         if quest_id:
             payload["questId"] = quest_id
 
@@ -184,11 +194,10 @@ class ZealyBot:
         log.info(f"[{self.email}] Mencoba complete quest: {quest_name or quest_id}")
 
         url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
-        payload = {}
 
         try:
             self._delay()
-            response = self.session.post(url, json=payload)
+            response = self.session.post(url, json={})
             data = response.json()
 
             if response.status_code in [200, 201]:
@@ -211,9 +220,7 @@ class ZealyBot:
         log.info(f"[{self.email}] Mencoba complete Twitter quest: {quest_name or quest_id}")
 
         url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
-        payload = {
-            "twitterUsername": self.twitter_username,
-        }
+        payload = {"twitterUsername": self.twitter_username}
 
         try:
             self._delay()
@@ -248,14 +255,13 @@ class ZealyBot:
                 xp = data.get("xp", 0)
                 log.info(f"[{self.email}] 📊 XP saat ini: {xp}")
                 return xp
-            else:
-                return 0
+            return 0
 
         except Exception as e:
             log.error(f"[{self.email}] ❌ Error ambil XP: {e}")
             return 0
 
-    def run(self) -> dict:
+    def run(self, verification_link: str = "") -> dict:
         """Jalankan seluruh flow bot"""
         result = {
             "email": self.email,
@@ -265,37 +271,41 @@ class ZealyBot:
             "message": ""
         }
 
-        # Step 1: Register atau login
+        # Step 1: Register
         if not self.register():
             result["message"] = "Gagal register/login"
             return result
 
         self._delay()
 
-        # Step 2: Join komunitas via invite link
+        # Step 2: Verifikasi email jika ada link
+        if verification_link:
+            self.verify_email(verification_link)
+            self._delay()
+
+        # Step 3: Join komunitas via invite link
         if not self.join_community_via_invite():
             result["message"] = "Gagal join komunitas"
             return result
 
         self._delay()
 
-        # Step 3: Ambil daftar quest
+        # Step 4: Ambil dan complete quest
         quests = self.get_quests()
-
-        # Step 4: Complete quest "Become an Injective Supporter" dan quest lainnya
         completed_count = 0
+
         for quest in quests:
             quest_id = quest.get("id", "")
             quest_name = quest.get("name", quest.get("title", ""))
             quest_type = quest.get("type", "")
 
-            # Skip quest yang membutuhkan manual verification
+            # Skip quest yang butuh verifikasi manual
             skip_types = ["discord", "snapshot", "manual"]
             if any(t in quest_type.lower() for t in skip_types):
                 log.info(f"[{self.email}] ⏭️ Skip quest manual: {quest_name}")
                 continue
 
-            # Complete Twitter quest
+            # Complete Twitter quest vs quest biasa
             if "twitter" in quest_type.lower() or "x.com" in quest_name.lower():
                 if self.complete_twitter_quest(quest_id, quest_name):
                     completed_count += 1

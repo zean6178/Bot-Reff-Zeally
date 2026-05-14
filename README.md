@@ -1,42 +1,51 @@
 # 🤖 Bot Referral Zealy - Injective
 
-Bot Python untuk auto-register & complete quest di Zealy via referral link.
+Bot Python untuk **auto-generate email** & **auto-register** akun Zealy via referral link menggunakan **mail.tm** sebagai temp email provider.
 
-## 📋 Syarat
+## 📋 Fitur
 
-- Python 3.8+
-- Akun Twitter/X yang:
-  - Berumur minimal **90 hari**
-  - Punya minimal **100 followers**
-- Email untuk daftar Zealy
+- ✅ **Auto-generate email** temporary via mail.tm API
+- ✅ **Auto-register** akun Zealy pakai email temp
+- ✅ **Auto-cek inbox** & klik link verifikasi email
+- ✅ **Auto-join** komunitas via invite/referral link
+- ✅ **Auto-complete quest** yang bisa di-automate
+- ✅ **Support proxy** (opsional)
+- ✅ **Simpan hasil** ke file output
+- ✅ **Simpan info akun** yang berhasil dibuat
 
 ## ⚙️ Instalasi
 
 ```bash
-# 1. Clone / download project
-cd Bot-Reff-Zeally
-
-# 2. Install dependencies
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 ## 🛠️ Konfigurasi
 
-### 1. Edit `accounts.txt`
-Isi dengan akun kamu, format:
-```
-email:password:twitter_username
-```
-Contoh:
-```
-johndoe@gmail.com:MyPassword123:johndoe_twitter
-janedoe@gmail.com:SecurePass456:janedoe_twitter
+### 1. Edit `config.py`
+```python
+NUM_ACCOUNTS = 5          # Jumlah akun yang ingin dibuat
+EMAIL_WAIT_TIMEOUT = 90   # Timeout tunggu email verifikasi (detik)
+DELAY_BETWEEN_ACCOUNTS = 10  # Delay antar akun (detik)
 ```
 
-### 2. Edit `config.py` (opsional)
-- `DELAY_BETWEEN_ACCOUNTS` — delay antar akun (default: 5 detik)
-- `DELAY_BETWEEN_REQUESTS` — delay antar request (default: 2 detik)
-- `PROXIES` — tambahkan proxy jika butuh (opsional)
+### 2. Edit `twitter_accounts.txt`
+Isi dengan Twitter/X username yang memenuhi syarat:
+```
+# Tanpa @, 1 per baris
+johndoe_twitter
+janedoe_twitter
+```
+
+> ⚠️ **Syarat Twitter:** Akun berumur minimal **90 hari** & punya minimal **100 followers**
+
+### 3. Proxy (Opsional)
+Edit `config.py`:
+```python
+PROXIES = [
+    "http://user:pass@host:port",
+]
+```
 
 ## 🚀 Cara Pakai
 
@@ -44,25 +53,45 @@ janedoe@gmail.com:SecurePass456:janedoe_twitter
 python main.py
 ```
 
-## 📊 Output
+## 📊 Flow Bot
 
-Hasil akan tersimpan di `results.txt`:
 ```
-[2024-01-01 12:00:00] email@gmail.com | Twitter: user | Status: success | XP: 10 | Selesai! Complete 3 quest
+Untuk setiap akun:
+  1. 📧 Generate email temp via mail.tm
+  2. 📝 Register akun Zealy dengan email tersebut
+  3. 📬 Tunggu & ambil email verifikasi dari inbox
+  4. ✅ Klik link verifikasi otomatis
+  5. 🔗 Join komunitas via invite link kamu
+  6. 🎯 Auto-complete quest yang tersedia
+  7. 📊 Cek XP & simpan hasil
 ```
 
 ## 📁 Struktur File
 
 ```
 Bot-Reff-Zeally/
-├── main.py          # Entry point, jalankan ini
-├── zealy_bot.py     # Core bot logic
-├── config.py        # Konfigurasi
-├── accounts.txt     # Daftar akun (isi sendiri)
-├── results.txt      # Output hasil (auto-generated)
-└── requirements.txt # Dependencies
+├── main.py                  ← Entry point, jalankan ini
+├── zealy_bot.py             ← Core Zealy bot logic
+├── mail_tm.py               ← Handler temp email (mail.tm)
+├── config.py                ← Semua konfigurasi
+├── twitter_accounts.txt     ← Daftar Twitter username
+├── results.txt              ← Output hasil (auto-generated)
+├── generated_accounts.txt   ← Info akun yang dibuat (auto-generated)
+└── requirements.txt         ← Dependencies
+```
+
+## 📄 Output
+
+**results.txt:**
+```
+[2024-01-01 12:00:00] Email: abc@dcctb.com | Twitter: user1 | Status: success | XP: 10 | Selesai! Complete 3 quest
+```
+
+**generated_accounts.txt:**
+```
+[2024-01-01 12:00:00] email=abc@dcctb.com | email_pass=pass123 | zealy_pass=pass123 | twitter=user1
 ```
 
 ## ⚠️ Disclaimer
 
-Bot ini dibuat untuk keperluan edukasi. Penggunaan bot pada platform dapat melanggar Terms of Service. Gunakan dengan bijak dan risiko ditanggung sendiri.
+Bot ini dibuat untuk keperluan edukasi. Penggunaan bot dapat melanggar Terms of Service platform. Gunakan dengan bijak dan risiko ditanggung sendiri.

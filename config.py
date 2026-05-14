@@ -11,21 +11,47 @@ COMMUNITY_SUBDOMAIN = "injectivemissions"
 # Zealy API base URL
 ZEALY_API_BASE = "https://api.zealy.io"
 
-# Delay antar akun (detik) - untuk menghindari rate limit
-DELAY_BETWEEN_ACCOUNTS = 5  # detik
+# ─────────────────────────────────────────────
+#  PENGATURAN UTAMA
+# ─────────────────────────────────────────────
+
+# Jumlah akun yang ingin dibuat
+NUM_ACCOUNTS = 5
+
+# File berisi daftar Twitter username (1 per baris)
+# Kosongkan string jika mau pakai username random
+TWITTER_USERNAMES_FILE = "twitter_accounts.txt"
+
+# ─────────────────────────────────────────────
+#  DELAY SETTINGS
+# ─────────────────────────────────────────────
+
+# Delay antar akun (detik)
+DELAY_BETWEEN_ACCOUNTS = 10
 
 # Delay antar request (detik)
-DELAY_BETWEEN_REQUESTS = 2  # detik
+DELAY_BETWEEN_REQUESTS = 2
 
-# File input akun
-ACCOUNTS_FILE = "accounts.txt"
+# Timeout tunggu email verifikasi (detik)
+EMAIL_WAIT_TIMEOUT = 90
 
-# File output hasil
+# ─────────────────────────────────────────────
+#  FILE OUTPUT
+# ─────────────────────────────────────────────
+
+# File output hasil run
 OUTPUT_FILE = "results.txt"
 
-# Proxy (opsional, kosongkan jika tidak pakai)
+# ─────────────────────────────────────────────
+#  PROXY (OPSIONAL)
+# ─────────────────────────────────────────────
 # Format: "http://user:pass@host:port" atau "http://host:port"
-PROXIES = []
+# Kosongkan list [] jika tidak pakai proxy
+PROXIES = [
+    # "http://user:pass@192.168.1.1:8080",
+]
 
-# User-Agent untuk request
+# ─────────────────────────────────────────────
+#  USER AGENT
+# ─────────────────────────────────────────────
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
