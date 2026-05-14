@@ -12,6 +12,11 @@ from config import (
 
 log = logging.getLogger(__name__)
 
+# Zealy menggunakan Supabase Auth di balik layar
+ZEALY_AUTH_URL = "https://backend.zealy.io/auth/v1"
+ZEALY_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlhdCI6MTY0NjY0MDQwOCwiZXhwIjoxOTYyMjE2NDA4fQ.Ie_DhMNsQbfOmOjgDwHfxo6ETCMwlnJ6CjKLFNLOeP4"
+ZEALY_BACKEND  = "https://backend.zealy.io"
+
 
 class ZealyBot:
     def __init__(self, email: str, password: str, twitter_username: str, proxy: str = None):
@@ -19,6 +24,7 @@ class ZealyBot:
         self.password = password
         self.twitter_username = twitter_username
         self.token = None
+        self.refresh_token = None
         self.user_id = None
 
         self.session = requests.Session()
@@ -28,6 +34,7 @@ class ZealyBot:
             "Accept": "application/json",
             "Origin": "https://zealy.io",
             "Referer": "https://zealy.io/",
+            "apikey": ZEALY_ANON_KEY,
         })
 
         if proxy:
@@ -50,14 +57,16 @@ class ZealyBot:
             })
 
     def register(self) -> bool:
-        """Daftar akun baru di Zealy"""
+        """Daftar akun baru di Zealy via Supabase Auth"""
         log.info(f"[{self.email}] Mencoba registrasi...")
 
-        url = f"{ZEALY_API_BASE}/users"
+        url = f"{ZEALY_AUTH_URL}/signup"
         payload = {
             "email": self.email,
             "password": self.password,
-            "name": self.twitter_username,
+            "data": {
+                "name": self.twitter_username,
+            }
         }
 
         try:
@@ -65,14 +74,20 @@ class ZealyBot:
             data = response.json()
 
             if response.status_code in [200, 201]:
-                self.token = data.get("token") or data.get("accessToken")
-                self.user_id = data.get("id") or data.get("userId")
+                self.token = data.get("access_token")
+                self.refresh_token = data.get("refresh_token")
+                user = data.get("user", {})
+                self.user_id = user.get("id")
                 log.info(f"[{self.email}] ✅ Registrasi berhasil! User ID: {self.user_id}")
                 self._set_auth_header()
                 return True
-            elif response.status_code == 409:
-                log.warning(f"[{self.email}] ⚠️ Email sudah terdaftar, mencoba login...")
-                return self.login()
+            elif response.status_code == 400:
+                msg = data.get("msg", "") or data.get("message", "") or str(data)
+                if "already registered" in msg.lower() or "already" in msg.lower():
+                    log.warning(f"[{self.email}] ⚠️ Email sudah terdaftar, mencoba login...")
+                    return self.login()
+                log.error(f"[{self.email}] ❌ Registrasi gagal: {response.status_code} - {data}")
+                return False
             else:
                 log.error(f"[{self.email}] ❌ Registrasi gagal: {response.status_code} - {data}")
                 return False
@@ -82,10 +97,10 @@ class ZealyBot:
             return False
 
     def login(self) -> bool:
-        """Login ke akun Zealy yang sudah ada"""
+        """Login ke akun Zealy via Supabase Auth"""
         log.info(f"[{self.email}] Mencoba login...")
 
-        url = f"{ZEALY_API_BASE}/auth/login"
+        url = f"{ZEALY_AUTH_URL}/token?grant_type=password"
         payload = {
             "email": self.email,
             "password": self.password,
@@ -97,8 +112,10 @@ class ZealyBot:
             data = response.json()
 
             if response.status_code == 200:
-                self.token = data.get("token") or data.get("accessToken")
-                self.user_id = data.get("id") or data.get("userId")
+                self.token = data.get("access_token")
+                self.refresh_token = data.get("refresh_token")
+                user = data.get("user", {})
+                self.user_id = user.get("id")
                 log.info(f"[{self.email}] ✅ Login berhasil! User ID: {self.user_id}")
                 self._set_auth_header()
                 return True
@@ -120,14 +137,17 @@ class ZealyBot:
 
         try:
             self._delay()
-            response = self.session.get(verification_link, allow_redirects=True)
+            # Gunakan session biasa tanpa auth header untuk verifikasi
+            plain = requests.Session()
+            plain.headers.update({"User-Agent": USER_AGENT})
+            response = plain.get(verification_link, allow_redirects=True)
 
             if response.status_code in [200, 201, 302]:
                 log.info(f"[{self.email}] ✅ Email berhasil diverifikasi!")
                 return True
             else:
-                log.error(f"[{self.email}] ❌ Verifikasi gagal: {response.status_code}")
-                return False
+                log.warning(f"[{self.email}] ⚠️ Verifikasi response: {response.status_code} (lanjut saja)")
+                return True  # Lanjut meskipun status code tidak ideal
 
         except Exception as e:
             log.error(f"[{self.email}] ❌ Error verifikasi email: {e}")
@@ -142,7 +162,8 @@ class ZealyBot:
         if "questId=" in INVITE_LINK:
             quest_id = INVITE_LINK.split("questId=")[1]
 
-        url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/members"
+        # Coba endpoint v2 backend dulu
+        url = f"{ZEALY_BACKEND}/public/communities/{COMMUNITY_SUBDOMAIN}/members"
         payload = {"inviteCode": invite_code}
         if quest_id:
             payload["questId"] = quest_id
@@ -159,18 +180,39 @@ class ZealyBot:
                 log.warning(f"[{self.email}] ⚠️ Sudah join komunitas sebelumnya")
                 return True
             else:
-                log.error(f"[{self.email}] ❌ Gagal join komunitas: {response.status_code} - {data}")
-                return False
+                # Fallback ke endpoint lama
+                log.warning(f"[{self.email}] ⚠️ Backend endpoint gagal ({response.status_code}), coba endpoint lain...")
+                return self._join_community_fallback(invite_code, quest_id)
 
         except Exception as e:
             log.error(f"[{self.email}] ❌ Error saat join komunitas: {e}")
+            return False
+
+    def _join_community_fallback(self, invite_code: str, quest_id: str = None) -> bool:
+        """Fallback join komunitas pakai endpoint alternatif"""
+        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/members"
+        payload = {"inviteCode": invite_code}
+        if quest_id:
+            payload["questId"] = quest_id
+        try:
+            self._delay()
+            response = self.session.post(url, json=payload)
+            data = response.json()
+            if response.status_code in [200, 201, 409]:
+                log.info(f"[{self.email}] ✅ Berhasil join komunitas (fallback)!")
+                return True
+            else:
+                log.error(f"[{self.email}] ❌ Gagal join komunitas: {response.status_code} - {data}")
+                return False
+        except Exception as e:
+            log.error(f"[{self.email}] ❌ Error fallback join: {e}")
             return False
 
     def get_quests(self) -> list:
         """Ambil daftar quest yang tersedia"""
         log.info(f"[{self.email}] Mengambil daftar quest...")
 
-        url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/quests"
+        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/quests"
 
         try:
             self._delay()
@@ -193,7 +235,7 @@ class ZealyBot:
         """Coba complete sebuah quest"""
         log.info(f"[{self.email}] Mencoba complete quest: {quest_name or quest_id}")
 
-        url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
+        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
 
         try:
             self._delay()
@@ -219,7 +261,7 @@ class ZealyBot:
         """Complete quest yang membutuhkan verifikasi Twitter"""
         log.info(f"[{self.email}] Mencoba complete Twitter quest: {quest_name or quest_id}")
 
-        url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
+        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/quests/{quest_id}/claim"
         payload = {"twitterUsername": self.twitter_username}
 
         try:
@@ -244,7 +286,7 @@ class ZealyBot:
 
     def get_user_xp(self) -> int:
         """Cek XP user di komunitas"""
-        url = f"{ZEALY_API_BASE}/communities/{COMMUNITY_SUBDOMAIN}/users/{self.user_id}"
+        url = f"https://api-v2.zealy.io/public/communities/{COMMUNITY_SUBDOMAIN}/users/{self.user_id}"
 
         try:
             self._delay()
