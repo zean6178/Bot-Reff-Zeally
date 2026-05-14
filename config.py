@@ -9,18 +9,6 @@ INVITE_LINK = "https://zealy.io/c/injectivemissions/invite/CJ75OjMext_T3VVKdsG2U
 COMMUNITY_SUBDOMAIN = "injectivemissions"
 
 # ─────────────────────────────────────────────
-#  GMAIL SETTINGS  ← ISI INI
-# ─────────────────────────────────────────────
-# Email Gmail kamu (akan dipakai untuk generate alias)
-GMAIL_ADDRESS = "alvaomegazr@gmail.com"
-
-# App Password Gmail (BUKAN password biasa!)
-# Cara buat: https://myaccount.google.com/apppasswords
-# Pilih "Mail" → Generate → dapat 16 karakter
-# Contoh: "abcd efgh ijkl mnop"
-GMAIL_APP_PASSWORD = "YOUR_APP_PASSWORD_HERE"
-
-# ─────────────────────────────────────────────
 #  2CAPTCHA API KEY  ← ISI INI
 # ─────────────────────────────────────────────
 # Daftar & isi saldo di: https://2captcha.com
