@@ -15,6 +15,10 @@ COMMUNITY_SUBDOMAIN = "injectivemissions"
 # Dashboard → API Keys → Copy key
 MAILSLURP_API_KEY = "YOUR_MAILSLURP_API_KEY_HERE"
 
+# Gmail settings for email alias
+GMAIL_ADDRESS      = "alvaomegazr@gmail.com"
+GMAIL_APP_PASSWORD = "YOUR_APP_PASSWORD_HERE"  # Get from: https://myaccount.google.com/apppasswords
+
 # ─────────────────────────────────────────────
 #  2CAPTCHA API KEY  ← ISI INI
 # ─────────────────────────────────────────────
