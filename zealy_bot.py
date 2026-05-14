@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 # Zealy API endpoints
 ZEALY_API      = "https://api-v2.zealy.io/public"
 ZEALY_BACKEND  = "https://backend.zealy.io"
+ZEALY_API_V1   = "https://api-v1.zealy.io"
 
 
 class ZealyBot:
@@ -66,37 +67,40 @@ class ZealyBot:
     # ─────────────────────────────────────────────
 
     def send_otp(self) -> bool:
-        """Kirim OTP ke email via Zealy"""
+        """
+        Kirim OTP ke email via Zealy.
+        Endpoint yang benar: POST /otp/send  (dari source JS Zealy)
+        """
         log.info(f"[{self.email}] 📨 Mengirim OTP ke email...")
 
-        # Zealy pakai flow: kirim email → dapat OTP di inbox
-        # Endpoint yang valid berdasarkan testing
+        # Endpoint yang ditemukan dari source JS Zealy:
+        # path:"/otp/send"  body:{email}
         endpoints_to_try = [
-            f"{ZEALY_BACKEND}/users",
-            f"{ZEALY_API}/users",
-            f"{ZEALY_API}/auth/send-otp",
-            f"{ZEALY_API}/auth/email",
+            (f"{ZEALY_API_V1}/otp/send",  {"email": self.email}),
+            (f"{ZEALY_API}/otp/send",     {"email": self.email}),
+            (f"{ZEALY_BACKEND}/otp/send", {"email": self.email}),
         ]
 
-        payload = {"email": self.email}
-
-        for url in endpoints_to_try:
+        for url, payload in endpoints_to_try:
             try:
                 response = self.session.post(url, json=payload)
                 self._log_response(f"send_otp {url}", response)
 
-                # 200/201/202 = OTP terkirim
                 if response.status_code in [200, 201, 202]:
-                    log.info(f"[{self.email}] ✅ OTP request berhasil via {url}")
+                    log.info(f"[{self.email}] ✅ OTP terkirim via {url}")
                     return True
 
-                # 400 bad request — endpoint ada tapi payload salah
                 if response.status_code == 400:
-                    log.warning(f"[{self.email}] ⚠️ Bad request di {url}: {response.text[:150]}")
+                    try:
+                        err = response.json()
+                    except Exception:
+                        err = response.text
+                    log.warning(f"[{self.email}] ⚠️ 400 di {url}: {str(err)[:150]}")
+                    # 400 berarti endpoint ada — kemungkinan email format/rate limit
+                    # Lanjut coba endpoint berikutnya saja
                     continue
 
-                # 404 = endpoint tidak ada, coba berikutnya
-                if response.status_code == 404:
+                if response.status_code in [404, 405]:
                     continue
 
             except Exception as e:
@@ -111,18 +115,16 @@ class ZealyBot:
     # ─────────────────────────────────────────────
 
     def verify_otp(self, otp: str) -> bool:
-        """Submit OTP code dan dapatkan token"""
+        """
+        Submit OTP code dan dapatkan token.
+        Endpoint yang benar: POST /otp/verify  body:{email, otp}  (dari source JS Zealy)
+        """
         log.info(f"[{self.email}] 🔑 Memverifikasi OTP: {otp}")
 
         endpoints_to_try = [
-            (f"{ZEALY_BACKEND}/users/verify",     {"email": self.email, "otp": otp}),
-            (f"{ZEALY_BACKEND}/users/verify",     {"email": self.email, "code": otp}),
-            (f"{ZEALY_API}/auth/verify-otp",      {"email": self.email, "otp": otp}),
-            (f"{ZEALY_API}/auth/verify-otp",      {"email": self.email, "code": otp}),
-            (f"{ZEALY_API}/auth/verify",          {"email": self.email, "otp": otp}),
-            (f"{ZEALY_API}/auth/validate",        {"email": self.email, "code": otp}),
-            (f"{ZEALY_API}/users/verify",         {"email": self.email, "otp": otp}),
-            (f"{ZEALY_BACKEND}/auth/verify",      {"email": self.email, "otp": otp, "type": "email"}),
+            (f"{ZEALY_API_V1}/otp/verify", {"email": self.email, "otp": otp}),
+            (f"{ZEALY_API}/otp/verify",    {"email": self.email, "otp": otp}),
+            (f"{ZEALY_BACKEND}/otp/verify",{"email": self.email, "otp": otp}),
         ]
 
         for url, payload in endpoints_to_try:
@@ -133,7 +135,6 @@ class ZealyBot:
 
                 if response.status_code in [200, 201]:
                     data = response.json()
-                    # Zealy bisa return berbagai field untuk token
                     self.token = (
                         data.get("accessToken") or
                         data.get("access_token") or
@@ -151,9 +152,9 @@ class ZealyBot:
                         self._set_auth()
                         return True
                     else:
-                        log.warning(f"[{self.email}] ⚠️ Response 200 tapi tidak ada token: {data}")
+                        log.warning(f"[{self.email}] ⚠️ Response 200 tapi tidak ada token: {str(data)[:150]}")
 
-                if response.status_code == 404:
+                if response.status_code in [404, 405]:
                     continue
 
             except Exception as e:
