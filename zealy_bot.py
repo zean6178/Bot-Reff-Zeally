@@ -139,6 +139,14 @@ class ZealyBot:
 
         try:
             # TIDAK delay sebelum verify — OTP Zealy expire cepat!
+            # PENTING: Zealy simpan session OTP berdasarkan base email (tanpa + alias)
+            # Tapi kirim OTP ke alias → verify dengan base email
+            base_email = self.email.split("+")[0] + "@" + self.email.split("@")[1] \
+                if "+" in self.email else self.email
+            if base_email != self.email:
+                log.info(f"[{self.email}] 🔄 Verify dengan base email: {base_email}")
+                payload["email"] = base_email
+
             resp = self._post(url, payload)
 
             if resp.status_code in [200, 201]:
