@@ -8,8 +8,16 @@ INVITE_LINK = "https://zealy.io/c/injectivemissions/invite/CJ75OjMext_T3VVKdsG2U
 # Community subdomain Zealy
 COMMUNITY_SUBDOMAIN = "injectivemissions"
 
-# Zealy API base URL
-ZEALY_API_BASE = "https://api.zealy.io"
+# ─────────────────────────────────────────────
+#  2CAPTCHA API KEY  ← ISI INI
+# ─────────────────────────────────────────────
+# Daftar & isi saldo di: https://2captcha.com
+TWOCAPTCHA_API_KEY = "YOUR_2CAPTCHA_API_KEY_HERE"
+
+# Cloudflare Turnstile site key milik Zealy
+# (didapat dari source HTML zealy.io/sign-up)
+TURNSTILE_SITE_KEY = "0x4AAAAAAA9xxWmJYaOq"
+TURNSTILE_PAGE_URL = "https://zealy.io/sign-up"
 
 # ─────────────────────────────────────────────
 #  PENGATURAN UTAMA
@@ -19,7 +27,6 @@ ZEALY_API_BASE = "https://api.zealy.io"
 NUM_ACCOUNTS = 5
 
 # File berisi daftar Twitter username (1 per baris)
-# Kosongkan string jika mau pakai username random
 TWITTER_USERNAMES_FILE = "twitter_accounts.txt"
 
 # ─────────────────────────────────────────────
@@ -35,18 +42,18 @@ DELAY_BETWEEN_REQUESTS = 2
 # Timeout tunggu email verifikasi (detik)
 EMAIL_WAIT_TIMEOUT = 90
 
+# Timeout tunggu 2captcha solve (detik)
+CAPTCHA_SOLVE_TIMEOUT = 120
+
 # ─────────────────────────────────────────────
 #  FILE OUTPUT
 # ─────────────────────────────────────────────
-
-# File output hasil run
 OUTPUT_FILE = "results.txt"
 
 # ─────────────────────────────────────────────
 #  PROXY (OPSIONAL)
 # ─────────────────────────────────────────────
-# Format: "http://user:pass@host:port" atau "http://host:port"
-# Kosongkan list [] jika tidak pakai proxy
+# Format: "http://user:pass@host:port"
 PROXIES = [
     # "http://user:pass@192.168.1.1:8080",
 ]
