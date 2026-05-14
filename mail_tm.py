@@ -12,6 +12,7 @@ GUERRILLA_API   = "https://api.guerrillamail.com/ajax.php"
 
 # Domain Guerrilla Mail — tidak di-blacklist Zealy
 GUERRILLA_DOMAINS = [
+    "guerrillamailblock.com",
     "sharklasers.com",
     "guerrillamail.info",
     "grr.la",
@@ -60,10 +61,9 @@ class MailTM:
     def _guerrilla_create(self) -> dict:
         """Buat email baru via Guerrilla Mail API"""
         try:
-            domain = random.choice(GUERRILLA_DOMAINS)
             username = self._random_string(10)
 
-            # Step 1: Init session dulu (dapat sid_token)
+            # Step 1: Init session dan dapat email random (JANGAN override domain)
             init_resp = requests.get(
                 GUERRILLA_API,
                 params={"f": "get_email_address", "lang": "en"},
@@ -73,14 +73,13 @@ class MailTM:
             init_data = init_resp.json()
             self._guerrilla_sid_token = init_data.get("sid_token", "")
 
-            # Step 2: Set custom email address
+            # Step 2: Set username custom (domain ikut default Guerrilla)
             resp = requests.get(
                 GUERRILLA_API,
                 params={
                     "f":           "set_email_user",
                     "email_user":  username,
                     "lang":        "en",
-                    "site":        domain,
                     "sid_token":   self._guerrilla_sid_token,
                 },
                 headers={"User-Agent": "Mozilla/5.0"},
@@ -88,8 +87,12 @@ class MailTM:
             )
             data = resp.json()
 
-            email = data.get("email_addr", f"{username}@{domain}")
-            self._guerrilla_sid_token = data.get("sid_token", "")
+            # Kalau set_email_user gagal, pakai email dari init saja
+            email = data.get("email_addr") or init_data.get("email_addr", "")
+            if not email:
+                raise ValueError("Email addr kosong dari Guerrilla API")
+
+            self._guerrilla_sid_token = data.get("sid_token") or self._guerrilla_sid_token
             self._guerrilla_seq       = data.get("email_timestamp", 0)
 
             self.email    = email
