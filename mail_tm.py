@@ -35,14 +35,15 @@ class MailTM:
         return "".join(random.choices(chars, k=length))
 
     def create_account(self) -> dict:
-        """Generate Gmail alias baru. Format: username+TAG@gmail.com"""
-        base   = self.gmail_address.split("@")[0]
-        domain = self.gmail_address.split("@")[1]
-        tag    = self._random_string(8)
-        self._alias_tag = tag
-        self.email      = f"{base}+{tag}@{domain}"
-        self.password   = self._random_string(12)
-        log.info(f"✅ Gmail alias dibuat: {self.email}")
+        """
+        Pakai Gmail langsung tanpa alias.
+        Zealy menolak email dengan format + alias.
+        Semua OTP masuk ke inbox Gmail yang sama.
+        """
+        self._alias_tag = None
+        self.email      = self.gmail_address  # Email asli tanpa alias
+        self.password   = self._random_string(12)  # dummy
+        log.info(f"✅ Gmail dipakai: {self.email}")
         return {"email": self.email, "password": self.password}
 
     def find_otp_code(self, max_wait: int = 90) -> str:
