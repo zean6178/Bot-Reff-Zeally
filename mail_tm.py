@@ -12,14 +12,10 @@ log = logging.getLogger(__name__)
 class MailTM:
     """
     Gmail + Alias email provider.
-    Flow:
-      1. Generate alias: alvaomegazr+abc123@gmail.com
-      2. Zealy kirim OTP ke alias tersebut
-      3. Bot baca inbox Gmail via IMAP -> extract OTP
-    Setup:
-      - GMAIL_ADDRESS = "alvaomegazr@gmail.com"
-      - GMAIL_APP_PASSWORD = "xxxx xxxx xxxx xxxx"
-        Buat di: https://myaccount.google.com/apppasswords
+    Each account uses a unique alias: zealyref+TAG@gmail.com
+    OTP is read via IMAP from the Gmail inbox.
+    Note: Zealy ACCEPTS + alias format (OTP was received correctly before).
+          The previous failure was OTP expiring due to delay, not invalid email.
     """
 
     def __init__(self):
@@ -36,21 +32,25 @@ class MailTM:
 
     def create_account(self) -> dict:
         """
-        Pakai Gmail langsung tanpa alias.
-        Zealy menolak email dengan format + alias.
-        Semua OTP masuk ke inbox Gmail yang sama.
+        Generate unique Gmail alias for each account.
+        Format: zealyref+TAG@gmail.com
+        All OTPs land in the same Gmail inbox — matched by TAG.
         """
-        self._alias_tag = None
-        self.email      = self.gmail_address  # Email asli tanpa alias
-        self.password   = self._random_string(12)  # dummy
-        log.info(f"✅ Gmail dipakai: {self.email}")
+        base   = self.gmail_address.split("@")[0]
+        domain = self.gmail_address.split("@")[1]
+        tag    = self._random_string(8)
+        self._alias_tag = tag
+        self.email      = f"{base}+{tag}@{domain}"
+        self.password   = self._random_string(12)
+        log.info(f"✅ Gmail alias dibuat: {self.email}")
         return {"email": self.email, "password": self.password}
 
     def find_otp_code(self, max_wait: int = 90) -> str:
-        """Tunggu dan baca OTP dari Gmail inbox via IMAP"""
+        """Wait for OTP from Gmail inbox via IMAP. Match by alias tag."""
         log.info(f"📬 Menunggu OTP di Gmail: {self.email}...")
         elapsed  = 0
-        interval = 5
+        interval = 3  # check every 3 seconds for faster OTP capture
+
         while elapsed < max_wait:
             otp = self._check_gmail_for_otp()
             if otp:
@@ -58,43 +58,57 @@ class MailTM:
             time.sleep(interval)
             elapsed += interval
             log.info(f"⏳ Menunggu OTP Gmail... ({elapsed}/{max_wait}s)")
+
         log.warning(f"⚠️ Timeout Gmail setelah {max_wait}s")
         return ""
 
     def _check_gmail_for_otp(self) -> str:
-        """Buka Gmail via IMAP dan cari email OTP dari Zealy"""
+        """Check Gmail IMAP for Zealy OTP email matching our alias."""
         try:
             imap = imaplib.IMAP4_SSL("imap.gmail.com", 993)
             imap.login(self.gmail_address, self.gmail_password)
             imap.select("INBOX")
+
+            # Search for unseen Zealy emails first, then all
             _, msgs = imap.search(None, '(FROM "zealy.io" UNSEEN)')
             if not msgs or not msgs[0]:
                 _, msgs = imap.search(None, '(FROM "zealy.io")')
+
             if not msgs or not msgs[0]:
                 imap.logout()
                 return ""
+
             mail_ids = msgs[0].split()
+            # Check most recent emails first (last 10)
             for mail_id in reversed(mail_ids[-10:]):
                 _, data = imap.fetch(mail_id, "(RFC822)")
                 msg     = emaillib.message_from_bytes(data[0][1])
                 subject = msg.get("Subject", "")
                 to_addr = msg.get("To", "").lower()
                 log.info(f"📧 Gmail: {subject} | To: {to_addr[:60]}")
+
+                # Match by alias tag to get the RIGHT OTP for this account
                 if self._alias_tag and self._alias_tag.lower() not in to_addr:
                     continue
+
+                # Check subject first (fastest)
                 otp = self._extract_otp(subject)
                 if otp:
                     imap.store(mail_id, "+FLAGS", "\\Seen")
                     imap.logout()
                     return otp
+
+                # Check body
                 body = self._get_email_body(msg)
                 otp  = self._extract_otp(body)
                 if otp:
                     imap.store(mail_id, "+FLAGS", "\\Seen")
                     imap.logout()
                     return otp
+
             imap.logout()
             return ""
+
         except imaplib.IMAP4.error as e:
             log.error(f"❌ IMAP login gagal: {e}")
             log.error("💡 Pastikan GMAIL_APP_PASSWORD sudah di-set di config.py!")
@@ -148,6 +162,7 @@ class MailTM:
         return ""
 
     def _extract_otp(self, text: str) -> str:
+        """Extract 6-char alphanumeric OTP (Zealy format: Z3Ge9A)"""
         if not text:
             return ""
         patterns = [
@@ -170,5 +185,5 @@ class MailTM:
         return ""
 
     def delete_account(self):
-        """Gmail alias tidak perlu dihapus"""
+        """Gmail alias does not need to be deleted."""
         pass
