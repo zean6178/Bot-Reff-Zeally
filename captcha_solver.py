@@ -60,19 +60,46 @@ class CaptchaSolver:
     def _submit(self, site_key: str, page_url: str) -> str:
         """Submit captcha ke 2captcha, return captcha ID"""
         try:
-            resp = requests.post(TWOCAPTCHA_IN, data={
-                "key":      self.api_key,
-                "method":   "turnstile",
-                "sitekey":  site_key,
-                "pageurl":  page_url,
-                "json":     1,
+            # Coba endpoint JSON baru dulu (lebih reliable)
+            resp = requests.post(
+                "https://api.2captcha.com/createTask",
+                json={
+                    "clientKey": self.api_key,
+                    "task": {
+                        "type":    "TurnstileTaskProxyless",
+                        "websiteURL": page_url,
+                        "websiteKey": site_key,
+                    }
+                },
+                timeout=30
+            )
+            data = resp.json()
+            log.debug(f"2captcha createTask response: {data}")
+
+            if data.get("errorId") == 0:
+                task_id = data.get("taskId")
+                log.info(f"🔐 Task ID: {task_id}")
+                return str(task_id)
+            else:
+                err = data.get("errorCode", "UNKNOWN")
+                log.warning(f"⚠️ createTask error ({err}), fallback ke in.php...")
+
+            # Fallback ke endpoint lama
+            resp2 = requests.post(TWOCAPTCHA_IN, data={
+                "key":     self.api_key,
+                "method":  "turnstile",
+                "sitekey": site_key,
+                "pageurl": page_url,
+                "json":    1,
             }, timeout=30)
 
-            data = resp.json()
-            if data.get("status") == 1:
-                return str(data.get("request", ""))
+            data2 = resp2.json()
+            log.debug(f"2captcha in.php response: {data2}")
+
+            if data2.get("status") == 1:
+                return str(data2.get("request", ""))
             else:
-                log.error(f"❌ 2captcha submit error: {data}")
+                log.error(f"❌ 2captcha submit error: {data2}")
                 return ""
 
         except Exception as e:
@@ -82,34 +109,58 @@ class CaptchaSolver:
     def _poll(self, captcha_id: str) -> str:
         """Poll 2captcha sampai dapat token (atau timeout)"""
         elapsed = 0
-        interval = 5   # cek setiap 5 detik
-        initial_wait = 15  # tunggu 15 detik sebelum cek pertama
+        interval = 5
+        initial_wait = 15
 
         time.sleep(initial_wait)
         elapsed += initial_wait
 
         while elapsed < CAPTCHA_SOLVE_TIMEOUT:
             try:
-                resp = requests.get(TWOCAPTCHA_RES, params={
+                # Coba endpoint baru (getTaskResult) dulu
+                resp = requests.post(
+                    "https://api.2captcha.com/getTaskResult",
+                    json={
+                        "clientKey": self.api_key,
+                        "taskId":    int(captcha_id),
+                    },
+                    timeout=15
+                )
+                data = resp.json()
+                log.debug(f"2captcha getTaskResult: {data}")
+
+                if data.get("errorId") == 0:
+                    status = data.get("status", "")
+                    if status == "ready":
+                        token = data.get("solution", {}).get("token", "")
+                        if token:
+                            return token
+                    elif status == "processing":
+                        log.info(f"⏳ Captcha processing... ({elapsed}s)")
+                        time.sleep(interval)
+                        elapsed += interval
+                        continue
+
+                # Fallback ke endpoint lama
+                resp2 = requests.get(TWOCAPTCHA_RES, params={
                     "key":    self.api_key,
                     "action": "get",
                     "id":     captcha_id,
                     "json":   1,
                 }, timeout=15)
+                data2 = resp2.json()
+                log.debug(f"2captcha res.php: {data2}")
 
-                data = resp.json()
+                if data2.get("status") == 1:
+                    return data2.get("request", "")
 
-                if data.get("status") == 1:
-                    return data.get("request", "")
-
-                if data.get("request") == "CAPCHA_NOT_READY":
+                if data2.get("request") == "CAPCHA_NOT_READY":
                     log.info(f"⏳ Captcha belum selesai... ({elapsed}s)")
                     time.sleep(interval)
                     elapsed += interval
                     continue
 
-                # Error lain
-                log.error(f"❌ 2captcha poll error: {data}")
+                log.error(f"❌ 2captcha poll error: {data2}")
                 return ""
 
             except Exception as e:
