@@ -128,8 +128,13 @@ class ZealyBot:
         log.info(f"[{self.email}] 🔑 Verifying OTP: {otp}")
 
         url = f"{ZEALY_V2}/api/authentication/otp/verify"
-        # Kirim OTP apa adanya (bisa alphanumeric 6 karakter)
-        payload = {"email": self.email, "otp": otp}
+        # Kirim OTP apa adanya (alphanumeric 6 karakter)
+        # Sertakan turnstileToken juga untuk jaga-jaga
+        payload = {
+            "email": self.email,
+            "otp": otp,
+            "turnstileToken": turnstile_token,
+        }
 
         try:
             self._delay()
@@ -137,6 +142,7 @@ class ZealyBot:
 
             if resp.status_code in [200, 201]:
                 data = resp.json()
+                log.info(f"[{self.email}] 🔍 verify_otp response: {str(data)[:300]}")
                 # Zealy return token dalam berbagai field
                 self.token = (
                     data.get("accessToken") or
