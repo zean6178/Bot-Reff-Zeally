@@ -16,7 +16,7 @@ TWOCAPTCHA_API_KEY = "YOUR_2CAPTCHA_API_KEY_HERE"
 
 # Cloudflare Turnstile site key milik Zealy
 # (didapat dari source HTML zealy.io/sign-up)
-TURNSTILE_SITE_KEY = "0x4AAAAAAA9xxWmJYaOq"
+TURNSTILE_SITE_KEY = "0x4AAAAAAA9xxWmJYaOq_CNN"
 TURNSTILE_PAGE_URL = "https://zealy.io/sign-up"
 
 # ─────────────────────────────────────────────

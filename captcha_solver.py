@@ -92,7 +92,6 @@ class CaptchaSolver:
                 "pageurl": page_url,
                 "json":    1,
             }, timeout=30)
-
             data2 = resp2.json()
             log.debug(f"2captcha in.php response: {data2}")
 
