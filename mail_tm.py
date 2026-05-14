@@ -70,6 +70,26 @@ class MailTM:
             pass
         return ["mailnull.com", "maildrop.cc"]
 
+    def get_all_domains(self) -> list:
+        """Ambil semua domain yang tersedia dari semua page"""
+        all_domains = []
+        try:
+            for page in range(1, 4):
+                response = self.session.get(f"{MAILTM_API}/domains?page={page}")
+                if response.status_code != 200:
+                    break
+                data = response.json()
+                if isinstance(data, list):
+                    domains = [d["domain"] for d in data if "domain" in d]
+                else:
+                    domains = [d["domain"] for d in data.get("hydra:member", []) if "domain" in d]
+                if not domains:
+                    break
+                all_domains.extend(domains)
+        except Exception:
+            pass
+        return all_domains if all_domains else self._get_fallback_domains()
+
     def create_account(self) -> dict:
         """Auto-generate email baru di mail.tm"""
         domains = self.get_domains()
