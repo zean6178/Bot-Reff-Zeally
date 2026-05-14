@@ -71,6 +71,14 @@ class ZealyBot:
 
         try:
             response = self.session.post(url, json=payload)
+            log.info(f"[{self.email}] 🔍 Register status: {response.status_code}")
+            log.info(f"[{self.email}] 🔍 Register response: {response.text[:500]}")
+
+            # Handle empty response
+            if not response.text.strip():
+                log.error(f"[{self.email}] ❌ Response kosong dari server")
+                return False
+
             data = response.json()
 
             if response.status_code in [200, 201]:
@@ -94,6 +102,7 @@ class ZealyBot:
 
         except Exception as e:
             log.error(f"[{self.email}] ❌ Error saat registrasi: {e}")
+            log.error(f"[{self.email}] 🔍 Raw response: {response.text[:500] if 'response' in locals() else 'N/A'}")
             return False
 
     def login(self) -> bool:
