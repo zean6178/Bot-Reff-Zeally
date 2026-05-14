@@ -36,13 +36,44 @@ class MailTM:
         try:
             response = self.session.get(f"{MAILTM_API}/domains")
             data = response.json()
-            domains = [d["domain"] for d in data.get("hydra:member", [])]
-            if not domains:
-                domains = ["dcctb.com"]  # fallback domain
-            return domains
+
+            # Response bisa berupa list langsung atau dict dengan hydra:member
+            if isinstance(data, list):
+                domains = [d["domain"] for d in data if "domain" in d]
+            elif isinstance(data, dict):
+                members = data.get("hydra:member", [])
+                domains = [d["domain"] for d in members if "domain" in d]
+            else:
+                domains = []
+
+            if domains:
+                log.info(f"✅ Domain tersedia: {domains}")
+                return domains
+
+            # Jika kosong, coba fetch ulang domain yang valid
+            log.warning("⚠️ Tidak ada domain dari API, mencoba fallback...")
+            return self._get_fallback_domains()
+
         except Exception as e:
             log.error(f"❌ Gagal ambil domain mail.tm: {e}")
-            return ["dcctb.com"]
+            return self._get_fallback_domains()
+
+    def _get_fallback_domains(self) -> list:
+        """Coba ambil domain valid secara manual"""
+        try:
+            # Coba endpoint alternatif
+            response = self.session.get(f"{MAILTM_API}/domains?page=1")
+            data = response.json()
+            if isinstance(data, list):
+                domains = [d["domain"] for d in data if "domain" in d]
+            else:
+                domains = [d["domain"] for d in data.get("hydra:member", []) if "domain" in d]
+            if domains:
+                return domains
+        except Exception:
+            pass
+        # Fallback ke domain yang diketahui aktif
+        return ["mailnull.com", "maildrop.cc"]
 
     def create_account(self) -> dict:
         """
