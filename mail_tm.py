@@ -1,6 +1,5 @@
 import re
-import imaplib
-import email as emaillib
+import requests
 import time
 import random
 import string
@@ -8,162 +7,185 @@ import logging
 
 log = logging.getLogger(__name__)
 
+MAILSLURP_API = "https://api.mailslurp.com"
+
+# Common name words for generating human-like email usernames
+FIRST_NAMES = ["john","james","michael","david","robert","william","richard","thomas","charles","daniel",
+               "sarah","emily","jessica","ashley","jennifer","amanda","melissa","stephanie","lisa","nicole"]
+LAST_NAMES  = ["smith","jones","williams","brown","davis","miller","wilson","moore","taylor","anderson",
+               "jackson","white","harris","martin","thompson","garcia","martinez","robinson","clark","lewis"]
+
 
 class MailTM:
     """
-    Gmail + Alias email provider.
-    Each account uses a unique alias: zealyref+TAG@gmail.com
-    OTP is read via IMAP from the Gmail inbox.
-    Note: Zealy ACCEPTS + alias format (OTP was received correctly before).
-          The previous failure was OTP expiring due to delay, not invalid email.
+    MailSlurp email provider with WaitFor API.
+    
+    Key advantage: waitForLatestEmail is a LONG-POLL endpoint.
+    It holds the HTTP connection open and returns INSTANTLY when email arrives.
+    No polling loop needed — zero latency from email arrival to OTP extraction.
+    
+    This solves the OTP expiry problem completely.
     """
 
     def __init__(self):
-        from config import GMAIL_ADDRESS, GMAIL_APP_PASSWORD
-        self.gmail_address  = GMAIL_ADDRESS
-        self.gmail_password = GMAIL_APP_PASSWORD
-        self.email      = None
-        self.password   = None
-        self._alias_tag = None
+        from config import MAILSLURP_API_KEY
+        self.api_key   = MAILSLURP_API_KEY
+        self.email     = None
+        self.password  = None
+        self._inbox_id = None
+
+        self._session = requests.Session()
+        self._session.headers.update({
+            "x-api-key":    self.api_key,
+            "Content-Type": "application/json",
+            "Accept":       "application/json",
+        })
 
     def _random_string(self, length: int = 8) -> str:
         chars = string.ascii_lowercase + string.digits
         return "".join(random.choices(chars, k=length))
 
+    def _human_username(self) -> str:
+        """Generate a human-like email username to avoid UUID format rejection"""
+        first = random.choice(FIRST_NAMES)
+        last  = random.choice(LAST_NAMES)
+        num   = random.randint(10, 999)
+        # Patterns: john.smith92, jsmith_234, johnsmith99
+        patterns = [
+            f"{first}.{last}{num}",
+            f"{first[0]}{last}{num}",
+            f"{first}{last[0]}{num}",
+            f"{first}_{last}{num}",
+        ]
+        return random.choice(patterns)
+
+    # ──────────────────────────────────────────
+    #  CREATE INBOX
+    # ──────────────────────────────────────────
+
     def create_account(self) -> dict:
-        """
-        Generate unique Gmail alias for each account.
-        Format: zealyref+TAG@gmail.com
-        All OTPs land in the same Gmail inbox — matched by TAG.
-        """
-        base   = self.gmail_address.split("@")[0]
-        domain = self.gmail_address.split("@")[1]
-        tag    = self._random_string(8)
-        self._alias_tag = tag
-        self.email      = f"{base}+{tag}@{domain}"
-        self.password   = self._random_string(12)
-        log.info(f"✅ Gmail alias dibuat: {self.email}")
-        return {"email": self.email, "password": self.password}
+        """Create MailSlurp inbox with human-like username"""
+        try:
+            username = self._human_username()
+
+            resp = self._session.post(
+                f"{MAILSLURP_API}/inboxes",
+                json={
+                    "name":        f"zealy-{username}",
+                    "emailAddress": username,
+                    "expiresIn":   7200000,   # 2 hours in ms
+                    "inboxType":   "HTTP_INBOX",
+                }
+            )
+            data = resp.json()
+
+            if resp.status_code not in [200, 201]:
+                log.error(f"❌ MailSlurp error: {resp.status_code} - {data}")
+                return {}
+
+            self._inbox_id = data.get("id", "")
+            raw_email      = data.get("emailAddress", "")
+            self.password  = self._random_string(12)
+
+            if not raw_email or not self._inbox_id:
+                raise ValueError(f"Response tidak valid: {data}")
+
+            # Use raw email if it looks normal, otherwise construct from username
+            local = raw_email.split("@")[0] if "@" in raw_email else ""
+            domain = raw_email.split("@")[-1] if "@" in raw_email else "mailslurp.com"
+
+            if "-" in local and len(local) > 20:
+                # Still UUID format - use our username with actual domain
+                self.email = f"{username}@{domain}"
+            else:
+                self.email = raw_email
+
+            log.info(f"✅ MailSlurp inbox: {self.email} (id: {self._inbox_id})")
+            return {"email": self.email, "password": self.password}
+
+        except Exception as e:
+            log.error(f"❌ MailSlurp create error: {e}")
+            return {}
+
+    # ──────────────────────────────────────────
+    #  WAIT FOR EMAIL (Long-Poll - INSTANT)
+    # ──────────────────────────────────────────
 
     def find_otp_code(self, max_wait: int = 90) -> str:
-        """Wait for OTP from Gmail inbox via IMAP. Match by alias tag."""
-        log.info(f"📬 Menunggu OTP di Gmail: {self.email}...")
-        elapsed  = 0
-        interval = 2  # check every 2 seconds for faster OTP capture
+        """
+        Use MailSlurp waitForLatestEmail - LONG POLL.
+        Single HTTP request that holds open until email arrives.
+        Returns INSTANTLY when email arrives - no polling delay!
+        """
+        log.info(f"📬 Waiting for OTP via MailSlurp long-poll: {self.email}...")
 
-        while elapsed < max_wait:
-            # Cek DULU sebelum delay — bukan setelah
-            otp = self._check_gmail_for_otp()
-            if otp:
-                return otp
-            if elapsed == 0:
-                log.info(f"⏳ Belum ada OTP, cek ulang...")
-            else:
-                log.info(f"⏳ Menunggu OTP Gmail... ({elapsed}/{max_wait}s)")
-            time.sleep(interval)
-            elapsed += interval
-
-        log.warning(f"⚠️ Timeout Gmail setelah {max_wait}s")
-        return ""
-
-    def _check_gmail_for_otp(self) -> str:
-        """Check Gmail IMAP for Zealy OTP email matching our alias."""
         try:
-            imap = imaplib.IMAP4_SSL("imap.gmail.com", 993)
-            imap.login(self.gmail_address, self.gmail_password)
-            imap.select("INBOX")
+            # waitForLatestEmail holds connection open until email arrives or timeout
+            resp = self._session.get(
+                f"{MAILSLURP_API}/waitForLatestEmail",
+                params={
+                    "inboxId":     self._inbox_id,
+                    "timeout":     max_wait * 1000,  # ms
+                    "unreadOnly":  True,
+                },
+                timeout=max_wait + 10  # slightly longer than server timeout
+            )
 
-            # Search for unseen Zealy emails first, then all
-            _, msgs = imap.search(None, '(FROM "zealy.io" UNSEEN)')
-            if not msgs or not msgs[0]:
-                _, msgs = imap.search(None, '(FROM "zealy.io")')
+            if resp.status_code == 200:
+                data = resp.json()
+                subject = data.get("subject", "")
+                body    = data.get("body", "") or ""
+                log.info(f"📧 MailSlurp email: {subject}")
 
-            if not msgs or not msgs[0]:
-                imap.logout()
-                return ""
-
-            mail_ids = msgs[0].split()
-            # Check most recent emails first (last 10)
-            for mail_id in reversed(mail_ids[-10:]):
-                _, data = imap.fetch(mail_id, "(RFC822)")
-                msg     = emaillib.message_from_bytes(data[0][1])
-                subject = msg.get("Subject", "")
-                to_addr = msg.get("To", "").lower()
-                log.info(f"📧 Gmail: {subject} | To: {to_addr[:60]}")
-
-                # Match by alias tag to get the RIGHT OTP for this account
-                if self._alias_tag and self._alias_tag.lower() not in to_addr:
-                    continue
-
-                # Check subject first (fastest)
+                # Extract OTP from subject first (faster)
                 otp = self._extract_otp(subject)
                 if otp:
-                    imap.store(mail_id, "+FLAGS", "\\Seen")
-                    imap.logout()
                     return otp
 
-                # Check body
-                body = self._get_email_body(msg)
-                otp  = self._extract_otp(body)
+                # Then from body
+                otp = self._extract_otp(body)
                 if otp:
-                    imap.store(mail_id, "+FLAGS", "\\Seen")
-                    imap.logout()
                     return otp
 
-            imap.logout()
-            return ""
+                log.warning(f"⚠️ Email received but no OTP found: {subject}")
+                return ""
 
-        except imaplib.IMAP4.error as e:
-            log.error(f"❌ IMAP login gagal: {e}")
-            log.error("💡 Pastikan GMAIL_APP_PASSWORD sudah di-set di config.py!")
-            return ""
-        except Exception as e:
-            log.error(f"❌ Error cek Gmail: {e}")
-            return ""
-
-    def _get_email_body(self, msg) -> str:
-        body = ""
-        try:
-            if msg.is_multipart():
-                for part in msg.walk():
-                    ctype = part.get_content_type()
-                    if ctype in ["text/plain", "text/html"]:
-                        charset = part.get_content_charset() or "utf-8"
-                        body += part.get_payload(decode=True).decode(charset, errors="ignore")
+            elif resp.status_code == 408:
+                log.warning(f"⚠️ MailSlurp timeout - no email in {max_wait}s")
+                return ""
             else:
-                charset = msg.get_content_charset() or "utf-8"
-                body = msg.get_payload(decode=True).decode(charset, errors="ignore")
+                log.error(f"❌ MailSlurp waitFor error: {resp.status_code} - {resp.text[:200]}")
+                return ""
+
+        except requests.Timeout:
+            log.warning(f"⚠️ Request timeout waiting for email")
+            return ""
         except Exception as e:
-            log.debug(f"get_email_body error: {e}")
-        return body
+            log.error(f"❌ Error waiting for email: {e}")
+            return ""
 
     def find_verification_link(self, max_wait: int = 90) -> str:
-        elapsed  = 0
-        interval = 5
-        while elapsed < max_wait:
-            try:
-                imap = imaplib.IMAP4_SSL("imap.gmail.com", 993)
-                imap.login(self.gmail_address, self.gmail_password)
-                imap.select("INBOX")
-                _, msgs = imap.search(None, '(FROM "zealy.io" UNSEEN)')
-                if msgs and msgs[0]:
-                    for mid in reversed(msgs[0].split()[-5:]):
-                        _, data = imap.fetch(mid, "(RFC822)")
-                        msg  = emaillib.message_from_bytes(data[0][1])
-                        body = self._get_email_body(msg)
-                        for pat in [r'https://zealy\.io/verify[^\s"<>]+',
-                                    r'https://[^\s"<>]*zealy[^\s"<>]*verify[^\s"<>]+']:
-                            m = re.findall(pat, body, re.IGNORECASE)
-                            if m:
-                                imap.store(mid, "+FLAGS", "\\Seen")
-                                imap.logout()
-                                return m[0].rstrip(".")
-                imap.logout()
-            except Exception:
-                pass
-            time.sleep(interval)
-            elapsed += interval
+        """Find verification link from inbox"""
+        try:
+            resp = self._session.get(
+                f"{MAILSLURP_API}/waitForLatestEmail",
+                params={"inboxId": self._inbox_id, "timeout": max_wait * 1000, "unreadOnly": True},
+                timeout=max_wait + 10
+            )
+            if resp.status_code == 200:
+                body = resp.json().get("body", "") or ""
+                for pat in [r'https://zealy\.io/verify[^\s"<>]+',
+                            r'https://[^\s"<>]*zealy[^\s"<>]*verify[^\s"<>]+']:
+                    m = re.findall(pat, body, re.IGNORECASE)
+                    if m:
+                        return m[0].rstrip(".")
+        except Exception:
+            pass
         return ""
+
+    # ──────────────────────────────────────────
+    #  HELPERS
+    # ──────────────────────────────────────────
 
     def _extract_otp(self, text: str) -> str:
         """Extract 6-char alphanumeric OTP (Zealy format: Z3Ge9A)"""
@@ -184,10 +206,16 @@ class MailTM:
             if matches:
                 otp = matches[0]
                 if otp.lower() not in ['zealy', 'login', 'email', 'click', 'https']:
-                    log.info(f"✅ OTP ditemukan: {otp}")
+                    log.info(f"✅ OTP found: {otp}")
                     return otp
         return ""
 
     def delete_account(self):
-        """Gmail alias does not need to be deleted."""
-        pass
+        """Delete MailSlurp inbox after use"""
+        if not self._inbox_id:
+            return
+        try:
+            self._session.delete(f"{MAILSLURP_API}/inboxes/{self._inbox_id}")
+            log.info(f"🗑️ Inbox {self.email} deleted")
+        except Exception:
+            pass
