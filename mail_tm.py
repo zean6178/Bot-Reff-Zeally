@@ -39,15 +39,26 @@ class MailTM:
     #  CREATE INBOX
     # ──────────────────────────────────────────
 
+    def _random_username(self, length: int = 10) -> str:
+        """Generate username normal yang tidak pakai UUID"""
+        # Pakai nama yang terlihat natural: huruf kecil + angka
+        first = random.choice(string.ascii_lowercase)
+        rest  = "".join(random.choices(string.ascii_lowercase + string.digits, k=length - 1))
+        return first + rest
+
     def create_account(self) -> dict:
-        """Buat inbox baru via MailSlurp API"""
+        """Buat inbox baru via MailSlurp API dengan username yang valid"""
         try:
+            # Generate username normal (bukan UUID)
+            username = self._random_username(10)
+
             resp = self._session.post(
                 f"{MAILSLURP_API}/inboxes",
                 json={
-                    "name":        f"zealy-{self._random_string(6)}",
-                    "expiresIn":   3600000,  # 1 jam dalam ms
-                    "inboxType":   "HTTP_INBOX",
+                    "name":           f"zealy-{username}",
+                    "emailAddress":   username,   # Set custom username!
+                    "expiresIn":      3600000,    # 1 jam dalam ms
+                    "inboxType":      "HTTP_INBOX",
                 }
             )
             data = resp.json()
